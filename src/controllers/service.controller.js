@@ -1,0 +1,436 @@
+import {asyncHandler} from "../utils/asyncHandler.js";
+import {ApiError} from "../utils/ApiError.js";
+import {ApiResponse} from "../utils/ApiResponse.js";
+import {Service} from "../models/services.model.js";
+import {Host} from "../models/host.model.js";
+import {uploadOnCloudinary, deleteFromCloudinary} from "../utils/cloudinary.js";
+import logger from "../utils/logger.js";
+
+/**
+ * Create a new service for a host
+ */
+
+const createService = asyncHandler(async (req, res) => {
+  const {name, type, capacity, amenities} = req.body;
+
+  // Extract the authenticated user's ID from the request
+  const userId = req.user
+    ?._id;
+
+  logger.info(`Starting createService process for user: ${userId}`);
+
+  // Step 1: Validate input fields
+  if (!name || !type || !capacity) {
+    logger.error("Missing required fields");
+    throw new ApiError(400, "All required fields must be provided");
+  }
+
+  // Validate service type
+  const allowedServiceTypes = [
+    "restaurant",
+    "hotel",
+    "lodge",
+    "home_stay",
+    "luxury_villa",
+    "other"
+  ];
+  if (!allowedServiceTypes.includes(type)) {
+    logger.error(`Invalid service type: ${type}`);
+    throw new ApiError(400, `Invalid service type. Allowed types: ${allowedServiceTypes.join(", ")}`);
+  }
+
+  // Validate capacity
+  if (capacity <= 0) {
+    logger.error(`Invalid capacity: ${capacity}`);
+    throw new ApiError(400, "Capacity must be a positive number");
+  }
+
+  // Step 2: Find the host associated with the authenticated user
+  const host = await Host.findOne({user: userId});
+  if (!host) {
+    logger.error(`Host not found for user ID: ${userId}`);
+    throw new ApiError(404, "Host not found. Please create a host profile first.");
+  }
+
+  // Step 3: Ownership verification
+  // Ensure the authenticated user is the owner of the host profile
+  if (host.user.toString() !== userId.toString()) {
+    logger.error(`User ${userId} is not authorized to create a service for host ${host._id}`);
+    throw new ApiError(403, "You are not authorized to create a service for this host.");
+  }
+
+  // Step 4: Create the service with the host's ID
+  const service = await Service.create({
+    host: host._id, // Use the host's ID
+    name,
+    type,
+    capacity,
+    amenities: Array.isArray(amenities)
+      ? amenities
+      : [amenities], // Ensure amenities is an array
+    images: [] // Images will be added later via a separate endpoint
+  });
+
+  logger.info(`Service created successfully for host: ${host._id}`);
+
+  // Step 5: Return the created service
+  res.status(201).json(new ApiResponse(201, service, "Service created successfully"));
+});
+/**
+ * Update a service
+ */
+const updateService = asyncHandler(async (req, res) => {
+  const {id} = req.params; // Service ID
+  const {name, type, capacity, amenities} = req.body;
+  const user = req.user._id; // Authenticated user's ID
+
+  logger.info(`Starting updateService process for service ID: ${id}`);
+
+  // Step 1: Validate input fields
+  if (!id) {
+    logger.error("Service ID is required");
+    throw new ApiError(400, "Service ID is required");
+  }
+
+  // Validate service type (if provided)
+  if (type) {
+    const allowedServiceTypes = [
+      "restaurant",
+      "hotel",
+      "lodge",
+      "home_stay",
+      "luxury_villa",
+      "other"
+    ];
+    if (!allowedServiceTypes.includes(type)) {
+      logger.error(`Invalid service type: ${type}`);
+      throw new ApiError(400, `Invalid service type. Allowed types: ${allowedServiceTypes.join(", ")}`);
+    }
+  }
+
+  // Validate capacity (if provided)
+  if (capacity && capacity <= 0) {
+    logger.error(`Invalid capacity: ${capacity}`);
+    throw new ApiError(400, "Capacity must be a positive number");
+  }
+
+  // Step 2: Find the service to update
+  const service = await Service.findById(id);
+  if (!service) {
+    logger.error(`Service not found with ID: ${id}`);
+    throw new ApiError(404, "Service not found");
+  }
+
+  // Step 3: Check if the authenticated user is the owner of the service
+  const host = await Host.findById(service.host);
+  if (!host) {
+    logger.error(`Host not found for service ID: ${id}`);
+    throw new ApiError(404, "Host not found");
+  }
+
+  if (host.user.toString() !== user.toString()) {
+    logger.error(`User ${user} is not authorized to update service ID: ${id}`);
+    throw new ApiError(403, "You are not authorized to update this service");
+  }
+
+  // Step 4: Build the update object
+  const updateData = {};
+  if (name) 
+    updateData.name = name;
+  if (type) 
+    updateData.type = type;
+  if (capacity) 
+    updateData.capacity = capacity;
+  if (amenities) 
+    updateData.amenities = Array.isArray(amenities)
+      ? amenities
+      : [amenities]; // Ensure amenities is an array
+  
+  // Step 5: Update the service
+  const updatedService = await Service.findByIdAndUpdate(id, {
+    $set: updateData
+  }, {
+    new: true,
+    runValidators: true
+  });
+
+  if (!updatedService) {
+    logger.error("Failed to update service");
+    throw new ApiError(500, "Failed to update service");
+  }
+
+  logger.info(`Service updated successfully for service ID: ${id}`);
+
+  // Step 6: Return the updated service
+  res.status(200).json(new ApiResponse(200, updatedService, "Service updated successfully"));
+});
+/**
+ * Delete a service
+ */
+const deleteService = asyncHandler(async (req, res) => {
+  const {id} = req.params; // Service ID
+  const user = req.user._id; // Authenticated user's ID
+
+  logger.info(`Starting deleteService process for service ID: ${id}`);
+
+  // Step 1: Validate the service ID
+  if (!id) {
+    logger.error("Service ID is required");
+    throw new ApiError(400, "Service ID is required");
+  }
+
+  // Step 2: Find the service to delete
+  const service = await Service.findById(id);
+  if (!service) {
+    logger.error(`Service not found with ID: ${id}`);
+    throw new ApiError(404, "Service not found");
+  }
+
+  // Step 3: Check if the authenticated user is the owner of the service
+  const host = await Host.findById(service.host);
+  if (!host) {
+    logger.error(`Host not found for service ID: ${id}`);
+    throw new ApiError(404, "Host not found");
+  }
+
+  if (host.user.toString() !== user.toString()) {
+    logger.error(`User ${user} is not authorized to update service ID: ${id}`);
+    throw new ApiError(403, "You are not authorized to update this service");
+  }
+
+  // Step 3: Delete images from Cloudinary (if any)
+  if (service.images && service.images.length > 0) {
+    for (const imageUrl of service.images) {
+      const publicId = imageUrl.split("/").pop().split(".")[0]; // Extract public ID from URL
+      await deleteFromCloudinary(publicId); // Delete the image from Cloudinary
+    }
+  }
+
+  // Step 4: Delete the service
+  await Service.findByIdAndDelete(id);
+
+  logger.info(`Service deleted successfully for service ID: ${id}`);
+
+  // Step 5: Return success response
+  res.status(200).json(new ApiResponse(200, {}, "Service deleted successfully"));
+});
+
+/**
+ * Fetch all services for a specific host
+ */
+const getServicesForHost = asyncHandler(async (req, res) => {
+  const {hostId} = req.params; // Host ID
+
+  logger.info(`Starting getServicesForHost process for host ID: ${hostId}`);
+
+  // Step 1: Validate host ID
+  if (!hostId) {
+    logger.error("Host ID is required");
+    throw new ApiError(400, "Host ID is required");
+  }
+
+  // Step 2: Check if the host exists
+  const host = await Host.findById(hostId);
+  if (!host) {
+    logger.error(`Host not found with ID: ${hostId}`);
+    throw new ApiError(404, "Host not found");
+  }
+
+  // Step 3: Fetch all services for the host
+  const services = await Service.find({host: hostId});
+
+  // If no services are found, return an empty array
+  if (!services || services.length === 0) {
+    logger.info(`No services found for host ID: ${hostId}`);
+    return res.status(200).json(new ApiResponse(200, {
+      services: []
+    }, "No services found"));
+  }
+
+  logger.info(`Fetched ${services.length} services for host ID: ${hostId}`);
+
+  // Step 4: Return the services
+  res.status(200).json(new ApiResponse(200, {
+    services
+  }, "Services fetched successfully"));
+});
+
+/**
+ * Upload images for a service
+ */
+const uploadServiceImages = asyncHandler(async (req, res) => {
+  const {id} = req.params; // Service ID
+  const files = req.files; // Array of uploaded files
+  const userId = req.user._id; // Authenticated user's ID
+
+  logger.info(`Starting uploadServiceImages process for service ID: ${id}`);
+
+  // Step 1: Validate the service ID
+  if (!id) {
+    logger.error("Service ID is required");
+    throw new ApiError(400, "Service ID is required");
+  }
+
+  // Step 2: Check if files were uploaded
+  if (!files || files.length === 0) {
+    logger.error("No images uploaded");
+    throw new ApiError(400, "No images uploaded");
+  }
+
+  // Step 3: Fetch the service document
+  const service = await Service.findById(id);
+  if (!service) {
+    logger.error(`Service not found with ID: ${id}`);
+    throw new ApiError(404, "Service not found");
+  }
+
+  // Step 4: Check if the authenticated user is the owner of the service
+  const host = await Host.findById(service.host);
+  if (!host) {
+    logger.error(`Host not found for service ID: ${id}`);
+    throw new ApiError(404, "Host not found");
+  }
+
+  if (host.user.toString() !== userId.toString()) {
+    logger.error(`User ${userId} is not authorized to upload images for service ID: ${id}`);
+    throw new ApiError(403, "You are not authorized to upload images for this service");
+  }
+
+  // Step 5: Upload images to Cloudinary and get their URLs
+  const imageUrls = await Promise.all(files.map(async file => {
+    const localFilePath = file.path; // Temporary file path
+
+    // Upload the image to Cloudinary
+    const cloudinaryResponse = await uploadOnCloudinary(localFilePath);
+
+    // If the upload fails, throw an error
+    if (!cloudinaryResponse || !cloudinaryResponse.secure_url) {
+      logger.error("Failed to upload image to Cloudinary");
+      throw new ApiError(500, "Failed to upload image to Cloudinary");
+    }
+
+    // Return the secure URL of the uploaded image
+    return cloudinaryResponse.secure_url;
+  }));
+
+  // Step 6: Update the service with new image URLs
+  const updatedService = await Service.findByIdAndUpdate(id, {
+    $push: {
+      images: {
+        $each: imageUrls // Append new image URLs to the existing ones
+      }
+    }
+  }, {
+    new: true // Return the updated document
+  });
+
+  if (!updatedService) {
+    logger.error("Failed to update service with new images");
+    throw new ApiError(500, "Failed to update service with new images");
+  }
+
+  logger.info(`Images uploaded successfully for service ID: ${id}`);
+
+  // Step 7: Return the updated service
+  res.status(200).json(new ApiResponse(200, updatedService, "Images uploaded successfully"));
+});
+
+/**
+ * Update images for a service
+ */
+
+const updateServiceImages = asyncHandler(async (req, res) => {
+  try {
+    logger.info("Starting updateServiceImages process");
+
+    // Extract service ID from request parameters
+    const id = req.params.id;
+
+    // Extract uploaded files and authenticated user's ID
+    const files = req.files; // Array of uploaded files
+    const userId = req.user._id; // Authenticated user's ID
+
+    // Step 1: Validate the service ID
+    if (!id) {
+      logger.error("Service ID is required");
+      throw new ApiError(400, "Service ID is required");
+    }
+
+    // Step 2: Check if files were uploaded
+    if (!files || files.length === 0) {
+      logger.error("No images uploaded");
+      throw new ApiError(400, "No images uploaded");
+    }
+
+    // Step 3: Fetch the existing service document
+    const service = await Service.findById(id);
+
+    // If the service is not found, throw a 404 error
+    if (!service) {
+      logger.error("Service not found");
+      throw new ApiError(404, "Service not found");
+    }
+
+    // Step 4: Check if the authenticated user is the owner of the service
+    const host = await Host.findById(service.host);
+    if (!host) {
+      logger.error(`Host not found for service ID: ${id}`);
+      throw new ApiError(404, "Host not found");
+    }
+
+    if (host.user.toString() !== userId.toString()) {
+      logger.error(`User ${userId} is not authorized to update images for service ID: ${id}`);
+      throw new ApiError(403, "You are not authorized to update images for this service");
+    }
+
+    // Step 5: Delete existing images from Cloudinary
+    if (service.images && service.images.length > 0) {
+      await Promise.all(service.images.map(async imageUrl => {
+        const publicId = imageUrl.split("/").pop().split(".")[0]; // Extract public ID from URL
+        await deleteFromCloudinary(publicId); // Delete the image from Cloudinary
+      }));
+    }
+
+    // Step 6: Upload new images to Cloudinary and get their URLs
+    const imageUrls = await Promise.all(files.map(async file => {
+      const localFilePath = file.path; // Temporary file path
+
+      // Upload the image to Cloudinary
+      const cloudinaryResponse = await uploadOnCloudinary(localFilePath);
+
+      // If the upload fails, throw an error
+      if (!cloudinaryResponse || !cloudinaryResponse.secure_url) {
+        logger.error("Failed to upload image to Cloudinary");
+        throw new ApiError(500, "Failed to upload image to Cloudinary");
+      }
+
+      // Return the secure URL of the uploaded image
+      return cloudinaryResponse.secure_url;
+    }));
+
+    // Step 7: Update the service document with the new image URLs (replace existing images)
+    const updatedService = await Service.findByIdAndUpdate(id, {
+      $set: {
+        images: imageUrls // Replace the `images` array with the new URLs
+      }
+    }, {
+      new: true // Return the updated document
+    });
+
+    logger.info("Service images updated successfully");
+
+    // Step 8: Return the updated service data
+    res.status(200).json(new ApiResponse(200, updatedService, "Service images updated successfully"));
+  } catch (error) {
+    logger.error(`Error in updateServiceImages: ${error.message}`, {stack: error.stack});
+    throw new ApiError(500, error.message || "Failed to update service images");
+  }
+});
+export {
+  createService,
+  updateService,
+  deleteService,
+  getServicesForHost,
+  uploadServiceImages,
+  updateServiceImages
+};
