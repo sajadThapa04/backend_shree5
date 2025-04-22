@@ -16,9 +16,16 @@ const createHost = asyncHandler(async (req, res) => {
   try {
     logger.info("Starting createHost process");
 
+    // First check if user already has a host profile
+    const existingUserHost = await Host.findOne({user: req.user._id}).session(session);
+    if (existingUserHost) {
+      logger.error("User already has a host profile");
+      throw new ApiError(400, "You can only create one host profile per account but you can create multiple service");
+    }
+
     // Extract data from the request body
     const {
-      listingType,
+      // listingType,  Commented out for future reference
       name,
       description,
       phone,
@@ -31,7 +38,7 @@ const createHost = asyncHandler(async (req, res) => {
     const user = req.user._id;
 
     // Step 1: Validate required fields
-    if (!listingType || !name || !description || !phone || !email || !coordinates) {
+    if (!name || !description || !phone || !email || !coordinates) {
       logger.error("Missing required fields");
       throw new ApiError(400, "All required fields must be provided");
     }
@@ -48,12 +55,34 @@ const createHost = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Invalid email format");
     }
 
-    // Step 4: Validate listing type
-    const allowedListingTypes = ["restaurant", "hotel", "lodge", "home_stay", "luxury_villa"];
-    if (!allowedListingTypes.includes(listingType)) {
-      logger.error("Invalid listing type");
-      throw new ApiError(400, "Invalid listing type. Allowed types: restaurant, hotel, lodge, home_stay, luxury_villa");
+    // Step 4: Check for existing phone or email
+    const existingHost = await Host.findOne({
+      $or: [{
+          phone
+        }, {
+          email
+        }]
+    }).session(session);
+
+    if (existingHost) {
+      if (existingHost.phone === phone) {
+        logger.error("Phone number already in use");
+        throw new ApiError(409, "Phone number is already associated with another listing");
+      }
+      if (existingHost.email === email) {
+        logger.error("Email already in use");
+        throw new ApiError(409, "Email is already associated with another listing");
+      }
     }
+
+    /* Commented out for future reference - listing type will be handled through service model
+                                        // Step 4: Validate listing type
+                                        const allowedListingTypes = ["restaurant", "hotel", "lodge", "home_stay", "luxury_villa"];
+                                        if (!allowedListingTypes.includes(listingType)) {
+                                          logger.error("Invalid listing type");
+                                          throw new ApiError(400, "Invalid listing type. Allowed types: restaurant, hotel, lodge, home_stay, luxury_villa");
+                                        }
+                                        */
 
     // Step 5: Validate coordinates (latitude and longitude)
     if (!Array.isArray(coordinates) || coordinates.length !== 2 || !coordinates.every(coord => typeof coord === "number")) {
@@ -85,7 +114,7 @@ const createHost = asyncHandler(async (req, res) => {
     // Step 8: Create the host profile
     const hostData = {
       user,
-      listingType,
+      // listingType,  Commented out for future reference
       name,
       description,
       address: {
@@ -102,17 +131,17 @@ const createHost = asyncHandler(async (req, res) => {
       email,
       policies: {
         cancellation: policies
-          ?.cancellation || "moderate" // Use the provided cancellation policy or default to "moderate"
+          ?.cancellation || "moderate"
       }
     };
 
     // Step 9: Save the host profile to the database
-    const host = await Host.create([hostData], {session}); // Use the session for transaction consistency
+    const host = await Host.create([hostData], {session});
 
     // Step 10: Update the user's role to "host" and link the host profile
     const updatedUser = await User.findByIdAndUpdate(user, {
-      role: "host", // Update role to "host"
-      hostProfile: host[0]._id // Link the host profile to the user
+      role: "host",
+      hostProfile: host[0]._id
     }, {
       new: true,
       session
@@ -120,7 +149,6 @@ const createHost = asyncHandler(async (req, res) => {
 
     if (!updatedUser) {
       logger.error("Failed to update user role to host");
-      // Rollback host creation if user update fails
       await session.abortTransaction();
       session.endSession();
       throw new ApiError(500, "Failed to update user role to host");
@@ -143,17 +171,14 @@ const createHost = asyncHandler(async (req, res) => {
 
     // Handle specific errors
     if (error instanceof ApiError) {
-      throw error; // Re-throw custom API errors
+      throw error;
     }
-    // Handle Mongoose validation errors
     if (error.name === "ValidationError") {
       throw new ApiError(400, error.message);
     }
-    // Handle duplicate key errors (e.g., unique fields)
     if (error.code === 11000) {
       throw new ApiError(400, "Duplicate field value entered");
     }
-    // Handle other errors
     throw new ApiError(500, error.message || "Failed to create host");
   }
 });
@@ -208,6 +233,120 @@ const getHostById = asyncHandler(async (req, res) => {
 });
 
 // Update a host profile
+// const updateHost = asyncHandler(async (req, res) => {
+//   try {
+//     logger.info("Starting updateHost process");
+
+//      Extract the host ID from the request parameters
+//     const {id} = req.params;
+
+//      Validate the host ID
+//     if (!id) {
+//       logger.error("Host ID is required");
+//       throw new ApiError(400, "Host ID is required");
+//     }
+
+//      Extract updatable fields from the request body
+//     const {
+//       name,
+//       description,
+//       phone,
+//       email,
+//       policies,
+//       coordinates,
+//       status
+//        isFeatured,
+//        featuredUntil
+//     } = req.body;
+
+//      Validate coordinates (latitude and longitude) if provided
+//     if (coordinates) {
+//       if (!Array.isArray(coordinates) || coordinates.length !== 2 || !coordinates.every(coord => typeof coord === "number")) {
+//         logger.error("Invalid coordinates format");
+//         throw new ApiError(400, "Coordinates must be an array of [longitude, latitude]");
+//       }
+
+//        Validate latitude and longitude values
+//       const [longitude, latitude] = coordinates;
+//       if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+//         logger.error("Invalid coordinates values");
+//         throw new ApiError(400, "Invalid coordinates. Longitude must be between -180 and 180, and latitude must be between -90 and 90");
+//       }
+//     }
+
+//      Build the update object
+//     const updateData = {};
+//     if (name)
+//       updateData.name = name;
+//     if (description)
+//       updateData.description = description;
+//     if (phone)
+//       updateData.phone = phone;
+//     if (email)
+//       updateData.email = email;
+//     if (
+//       policies
+//       ?.cancellation)
+//       updateData["policies.cancellation"] = policies.cancellation;
+//     if (coordinates)
+//       updateData["address.coordinates.coordinates"] = coordinates;
+//     if (status)
+//       updateData.status = status;
+
+//      if (isFeatured !== undefined)
+//        updateData.isFeatured = isFeatured;
+//      if (featuredUntil)
+//        updateData.featuredUntil = featuredUntil;
+
+//      Update the host in the database
+//     const updatedHost = await Host.findByIdAndUpdate(id, {
+//       $set: updateData
+//     }, {
+//       new: true,
+//       runValidators: true
+//     });
+
+//      If the host is not found, throw a 404 error
+//     if (!updatedHost) {
+//       logger.error("Host not found");
+//       throw new ApiError(404, "Host not found");
+//     }
+
+//      Check if the authenticated user is the owner of the host profile
+//     if (updatedHost.user.toString() !== req.user._id.toString()) {
+//       logger.error("Unauthorized to update this host");
+//       throw new ApiError(403, "You are not authorized to update this host");
+//     }
+
+//     logger.info("Host updated successfully");
+
+//      Return the updated host data
+//     res.status(200).json(new ApiResponse(200, updatedHost, "Host updated successfully"));
+//   } catch (error) {
+//     logger.error(`Error in updateHost: ${error.message}`, {stack: error.stack});
+
+//      Handle specific errors
+//     if (error instanceof ApiError) {
+//       throw error;  Re-throw custom API errors
+//     }
+//      Handle Mongoose CastError (invalid ID format)
+//     if (error.name === "CastError") {
+//       throw new ApiError(400, "Invalid host ID");
+//     }
+//      Handle Mongoose validation errors
+//     if (error.name === "ValidationError") {
+//       throw new ApiError(400, error.message);
+//     }
+//      Handle duplicate key errors (e.g., unique fields)
+//     if (error.code === 11000) {
+//       throw new ApiError(400, "Duplicate field value entered");
+//     }
+//      Handle other errors
+//     throw new ApiError(500, error.message || "Failed to update host");
+//   }
+// });
+
+//we are using the other updatehost Controller and updated the previous one
 const updateHost = asyncHandler(async (req, res) => {
   try {
     logger.info("Starting updateHost process");
@@ -229,12 +368,11 @@ const updateHost = asyncHandler(async (req, res) => {
       email,
       policies,
       coordinates,
-      status,
-      isFeatured,
-      featuredUntil
+      status
     } = req.body;
 
     // Validate coordinates (latitude and longitude) if provided
+    let geocodedAddress = null;
     if (coordinates) {
       if (!Array.isArray(coordinates) || coordinates.length !== 2 || !coordinates.every(coord => typeof coord === "number")) {
         logger.error("Invalid coordinates format");
@@ -246,6 +384,13 @@ const updateHost = asyncHandler(async (req, res) => {
       if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
         logger.error("Invalid coordinates values");
         throw new ApiError(400, "Invalid coordinates. Longitude must be between -180 and 180, and latitude must be between -90 and 90");
+      }
+
+      // Reverse geocode coordinates to get address details
+      geocodedAddress = await geocodeCoordinates(coordinates);
+      if (!geocodedAddress) {
+        logger.error("Failed to geocode coordinates");
+        throw new ApiError(500, "Failed to geocode coordinates");
       }
     }
 
@@ -263,14 +408,19 @@ const updateHost = asyncHandler(async (req, res) => {
       policies
       ?.cancellation) 
       updateData["policies.cancellation"] = policies.cancellation;
-    if (coordinates) 
-      updateData["address.coordinates.coordinates"] = coordinates;
+    if (coordinates) {
+      updateData["address.coordinates"] = {
+        type: "Point",
+        coordinates: coordinates
+      };
+      // Update address fields from geocoding
+      updateData["address.country"] = geocodedAddress.country;
+      updateData["address.city"] = geocodedAddress.city;
+      updateData["address.street"] = geocodedAddress.street;
+      updateData["address.zipCode"] = geocodedAddress.zipCode;
+    }
     if (status) 
       updateData.status = status;
-    if (isFeatured !== undefined) 
-      updateData.isFeatured = isFeatured;
-    if (featuredUntil) 
-      updateData.featuredUntil = featuredUntil;
     
     // Update the host in the database
     const updatedHost = await Host.findByIdAndUpdate(id, {
@@ -301,21 +451,17 @@ const updateHost = asyncHandler(async (req, res) => {
 
     // Handle specific errors
     if (error instanceof ApiError) {
-      throw error; // Re-throw custom API errors
+      throw error;
     }
-    // Handle Mongoose CastError (invalid ID format)
     if (error.name === "CastError") {
       throw new ApiError(400, "Invalid host ID");
     }
-    // Handle Mongoose validation errors
     if (error.name === "ValidationError") {
       throw new ApiError(400, error.message);
     }
-    // Handle duplicate key errors (e.g., unique fields)
     if (error.code === 11000) {
       throw new ApiError(400, "Duplicate field value entered");
     }
-    // Handle other errors
     throw new ApiError(500, error.message || "Failed to update host");
   }
 });
@@ -378,12 +524,12 @@ const getAllHosts = asyncHandler(async (req, res) => {
     logger.info("Starting getAllHosts process");
 
     // Extract query parameters for pagination, sorting, and filtering
-    const page = parseInt(req.query.page, 10) || 1; // Default to page 1
-    const limit = parseInt(req.query.limit, 10) || 10; // Default to 10 hosts per page
-    const sortBy = req.query.sortBy || "createdAt"; // Default sort by createdAt
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const sortBy = req.query.sortBy || "createdAt";
     const sortOrder = req.query.sortOrder === "asc"
       ? 1
-      : -1; // Default sort order is descending
+      : -1;
     const filters = {};
 
     // Validate page and limit
@@ -393,14 +539,16 @@ const getAllHosts = asyncHandler(async (req, res) => {
     }
 
     // Optional: Add filters based on query parameters
-    if (req.query.listingType) {
-      filters.listingType = req.query.listingType; // Filter by listing type
-    }
+    /* Commented out for future reference - listing type will be handled through service model
+                                                if (req.query.listingType) {
+                                                  filters.listingType = req.query.listingType;
+                                                }
+                                                */
     if (req.query.status) {
-      filters.status = req.query.status; // Filter by status
+      filters.status = req.query.status;
     }
     if (req.query.isFeatured) {
-      filters.isFeatured = req.query.isFeatured === "true"; // Filter by isFeatured
+      filters.isFeatured = req.query.isFeatured === "true";
     }
 
     // Aggregation pipeline stages
@@ -420,14 +568,14 @@ const getAllHosts = asyncHandler(async (req, res) => {
       // Stage 3: Lookup to join with the User collection
       {
         $lookup: {
-          from: "users", // Collection to join with
-          localField: "user", // Field from the Host collection
-          foreignField: "_id", // Field from the User collection
-          as: "userDetails" // Output array field
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "userDetails"
         }
       },
 
-      // Stage 4: Unwind the userDetails array (since $lookup returns an array)
+      // Stage 4: Unwind the userDetails array
       {
         $unwind: "$userDetails"
       },
@@ -436,7 +584,7 @@ const getAllHosts = asyncHandler(async (req, res) => {
       {
         $project: {
           _id: 1,
-          listingType: 1,
+          /* listingType: 1, // Commented out for future reference */
           name: 1,
           description: 1,
           address: 1,
@@ -459,19 +607,16 @@ const getAllHosts = asyncHandler(async (req, res) => {
 
       // Stage 6: Pagination
       {
-        $skip: (page - 1) * limit // Skip documents for pagination
+        $skip: (page - 1) * limit
       }, {
-        $limit: limit // Limit the number of documents per page
+        $limit: limit
       }
     ];
 
     // Execute the aggregation pipeline
     const hosts = await Host.aggregate(pipeline);
-
-    // Get the total count of hosts (for pagination metadata)
     const totalHosts = await Host.countDocuments(filters);
 
-    // If no hosts are found, return an empty array
     if (!hosts || hosts.length === 0) {
       logger.info("No hosts found");
       return res.status(200).json(new ApiResponse(200, {
@@ -481,36 +626,32 @@ const getAllHosts = asyncHandler(async (req, res) => {
 
     logger.info("All hosts fetched successfully");
 
-    // Return the paginated hosts
     res.status(200).json(new ApiResponse(200, {
-      hosts, // List of hosts for the current page
+      hosts,
       pagination: {
-        totalDocs: totalHosts, // Total number of hosts
-        limit, // Number of hosts per page
-        totalPages: Math.ceil(totalHosts / limit), // Total number of pages
-        page, // Current page
-        hasPrevPage: page > 1, // Whether there's a previous page
-        hasNextPage: page < Math.ceil(totalHosts / limit), // Whether there's a next page
+        totalDocs: totalHosts,
+        limit,
+        totalPages: Math.ceil(totalHosts / limit),
+        page,
+        hasPrevPage: page > 1,
+        hasNextPage: page < Math.ceil(totalHosts / limit),
         prevPage: page > 1
           ? page - 1
-          : null, // Previous page number (if any)
+          : null,
         nextPage: page < Math.ceil(totalHosts / limit)
           ? page + 1
-          : null // Next page number (if any)
+          : null
       }
     }, "All hosts fetched successfully"));
   } catch (error) {
     logger.error(`Error in getAllHosts: ${error.message}`, {stack: error.stack});
 
-    // Handle specific errors
     if (error instanceof ApiError) {
-      throw error; // Re-throw custom API errors
+      throw error;
     }
-    // Handle Mongoose CastError (invalid query parameters)
     if (error.name === "CastError") {
       throw new ApiError(400, "Invalid query parameters");
     }
-    // Handle other errors
     throw new ApiError(500, error.message || "Failed to fetch all hosts");
   }
 });
@@ -522,12 +663,12 @@ const searchHosts = asyncHandler(async (req, res) => {
 
     // Extract query parameters from the request
     const {
-      listingType, // Filter by listing type (restaurant, hotel, lodge, home_stay, luxury_villa)
-      page = 1, // Pagination: default page 1
-      limit = 10, // Pagination: default limit 10
-      sortBy, // Sort by field (e.g., "createdAt")
-      sortOrder = "asc", // Sort order ("asc" or "desc")
-      ...filters // Other filters (e.g., address.country)
+      /* listingType, // Commented out for future reference */
+      page = 1,
+      limit = 10,
+      sortBy,
+      sortOrder = "asc",
+      ...filters
     } = req.query;
 
     // Build the match stage for filtering
@@ -537,23 +678,25 @@ const searchHosts = asyncHandler(async (req, res) => {
     if (filters["address.country"]) {
       matchStage["address.country"] = {
         $regex: filters["address.country"],
-        $options: "i" // Case-insensitive
+        $options: "i"
       };
     }
 
-    // Filter by listing type
-    if (listingType) {
-      matchStage.listingType = listingType;
-    }
+    /* Commented out for future reference - listing type will be handled through service model
+                                            // Filter by listing type
+                                            if (listingType) {
+                                              matchStage.listingType = listingType;
+                                            }
+                                            */
 
     // Build the sort stage
     const sortStage = {};
     if (sortBy) {
       sortStage[sortBy] = sortOrder === "asc"
         ? 1
-        : -1; // 1 for ascending, -1 for descending
+        : -1;
     } else {
-      sortStage["createdAt"] = -1; // Default sort by newest first
+      sortStage["createdAt"] = -1;
     }
 
     // Calculate pagination skip value
@@ -561,36 +704,23 @@ const searchHosts = asyncHandler(async (req, res) => {
 
     // Aggregation pipeline
     const aggregationPipeline = [
-      // Stage 1: Match documents based on filters
       {
         $match: matchStage
-      },
-
-      // Stage 2: Sort documents
-      {
+      }, {
         $sort: sortStage
-      },
-
-      // Stage 3: Lookup to join with the User collection
-      {
+      }, {
         $lookup: {
-          from: "users", // Collection to join with
-          localField: "user", // Field from the Host collection
-          foreignField: "_id", // Field from the User collection
-          as: "userDetails" // Output array field
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "userDetails"
         }
-      },
-
-      // Stage 4: Unwind the userDetails array (since $lookup returns an array)
-      {
+      }, {
         $unwind: "$userDetails"
-      },
-
-      // Stage 5: Project only the required fields
-      {
+      }, {
         $project: {
           _id: 1,
-          listingType: 1,
+          /* listingType: 1, // Commented out for future reference */
           name: 1,
           description: 1,
           address: 1,
@@ -609,21 +739,18 @@ const searchHosts = asyncHandler(async (req, res) => {
             profileImage: 1
           }
         }
-      },
-
-      // Stage 6: Facet for pagination and metadata
-      {
+      }, {
         $facet: {
           hosts: [
             {
-              $skip: skip // Skip documents for pagination
+              $skip: skip
             }, {
-              $limit: limit // Limit the number of documents
+              $limit: limit
             }
           ],
           metadata: [
             {
-              $count: "totalHosts" // Count total matching documents
+              $count: "totalHosts"
             }
           ]
         }
@@ -632,15 +759,12 @@ const searchHosts = asyncHandler(async (req, res) => {
 
     // Execute the aggregation pipeline
     const [result] = await Host.aggregate(aggregationPipeline);
-
-    // Extract hosts and metadata from the result
     const hosts = result.hosts;
     const totalHosts = result.metadata[0]
       ?.totalHosts || 0;
 
     logger.info("Hosts searched successfully");
 
-    // Return the response with pagination metadata
     res.status(200).json(new ApiResponse(200, {
       hosts,
       pagination: {
@@ -695,9 +819,7 @@ const getHostsByUser = asyncHandler(async (req, res) => {
   }
 });
 
-
-
-// we have shifter the below features to the service and room controller
+// we have shifted the below features to the service and room controller
 
 // Upload images for the first time
 // const uploadImages = asyncHandler(async (req, res) => {

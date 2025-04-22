@@ -9,13 +9,13 @@ const hostSchema = new Schema({
     required: true
   },
   // Type of listing (e.g., restaurant, hotel, lodge)
-  listingType: {
-    type: String,
-    enum: [
-      "restaurant", "hotel", "lodge", "home_stay", "luxury_villa"
-    ],
-    required: true
-  },
+  // listingType: {
+  //   type: String,
+  //   enum: [
+  //     "restaurant", "hotel", "lodge", "home_stay", "luxury_villa"
+  //   ],
+  //   required: true
+  // },
   // Basic details
   name: {
     type: String,
@@ -27,7 +27,7 @@ const hostSchema = new Schema({
     type: String,
     required: true,
     trim: true,
-    maxlength: 1000 // Limit the length of the description
+    maxlength: 5000 // added 5000 characters limit
   },
   // Location details
   address: {
@@ -73,6 +73,7 @@ const hostSchema = new Schema({
     type: String,
     required: true,
     trim: true,
+    unique: true,
     validate: {
       validator: function (phone) {
         // Basic phone number validation (adjust regex as needed)
@@ -83,6 +84,7 @@ const hostSchema = new Schema({
   },
   email: {
     type: String,
+    unique: true,
     required: true,
     trim: true,
     lowercase: true,
