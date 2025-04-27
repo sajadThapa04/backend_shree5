@@ -21,6 +21,7 @@ const hostSchema = new Schema({
     type: String,
     required: true,
     trim: true,
+    unique: true,
     maxlength: 100 // Limit the length of the name
   },
   description: {

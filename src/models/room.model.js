@@ -1,58 +1,187 @@
 import mongoose, {Schema} from "mongoose";
 
 const roomSchema = new Schema({
-  // Reference to the Service (e.g., hotel or lodge)
+  // Reference to the Service (e.g., hotel, lodge, villa, homestay)
   service: {
     type: Schema.Types.ObjectId,
     ref: "Service",
-    required: true
+    required: [true, "Service reference is required"]
   },
 
   // Room details
   name: {
     type: String,
-    required: true,
+    required: [
+      true, "Room name is required"
+    ],
     trim: true,
-    maxlength: 100, // Limit the length of the room name
-    unique: true // Ensure room names are unique
+    maxlength: [
+      100, "Room name cannot exceed 100 characters"
+    ],
+    unique: true
   },
 
-  // Room type (e.g., single, double, suite)
+  // Room type with expanded enum values
   roomType: {
     type: String,
     enum: [
-      "single", "double", "suite", "other"
+      "single",
+      "double",
+      "twin",
+      "triple",
+      "queen",
+      "king",
+      "family",
+      "suite",
+      "presidential",
+      "dormitory",
+      "cottage",
+      "tent",
+      "penthouse",
+      "honeymoon",
+      "studio",
+      "shared",
+      "private",
+      "entire_home",
+      "other"
     ],
-    required: true
+    required: [true, "Room type is required"]
   },
+
+  // Detailed description
+  description: {
+    type: String,
+    trim: true,
+    maxlength: [2000, "Description cannot exceed 2000 characters"]
+  },
+
+  // Day-specific availability with time slots
+  openingHours: [
+    {
+      day: {
+        type: String,
+        enum: [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday"
+        ],
+        required: true
+      },
+      timeSlots: [
+        {
+          openingTime: {
+            type: String,
+            required: true,
+            match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format"]
+          },
+          closingTime: {
+            type: String,
+            required: true,
+            match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format"]
+          }
+        }
+      ]
+    }
+  ],
 
   // Pricing details
   pricePerNight: {
     type: Number,
-    required: true,
-    min: [0, "Price per night cannot be negative."]
+    required: [
+      true, "Price per night is required"
+    ],
+    min: [0, "Price per night cannot be negative"]
   },
 
   // Capacity details
   capacity: {
-    type: Number,
-    required: true,
-    min: [1, "Capacity must be at least 1."]
+    adults: {
+      type: Number,
+      required: [
+        true, "Adult capacity is required"
+      ],
+      min: [1, "Must accommodate at least 1 adult"]
+    },
+    children: {
+      type: Number,
+      default: 0,
+      min: [0, "Children capacity cannot be negative"]
+    }
   },
+
+  // Room features
+  size: {
+    type: Number,
+    min: [0, "Room size cannot be negative"]
+  },
+  floorNumber: {
+    type: Number,
+    min: [0, "Floor number cannot be negative"]
+  },
+  hasPrivatePool: {
+    type: Boolean,
+    default: false
+  },
+  bedType: {
+    type: String,
+    enum: [
+      "king",
+      "queen",
+      "double",
+      "single",
+      "bunk",
+      "floor_mattress",
+      "other"
+    ],
+    default: "queen"
+  },
+  bathroomType: {
+    type: String,
+    enum: [
+      "shared", "private", "ensuite"
+    ],
+    default: "private"
+  },
+
+  // Searchable tags
+  tags: [
+    {
+      type: String,
+      trim: true,
+      lowercase: true
+    }
+  ],
 
   // Amenities
   amenities: [
     {
       type: String,
-      trim: true
+      trim: true,
+      lowercase: true
     }
   ],
 
   // Images
   images: [
     {
-      type: String, // URLs to images
-      trim: true
+      url: {
+        type: String,
+        trim: true,
+        required: true
+      },
+      isFeatured: {
+        type: Boolean,
+        default: false
+      },
+      caption: {
+        type: String,
+        trim: true,
+        maxlength: 100
+      }
     }
   ],
 
@@ -60,12 +189,38 @@ const roomSchema = new Schema({
   isAvailable: {
     type: Boolean,
     default: true
-  }
-}, {timestamps: true});
+  },
 
-// Index for efficient querying
-roomSchema.index({service: 1}); // Index for service reference
-roomSchema.index({roomType: 1}); // Index for room type
+  // For future pricing flexibility
+  pricingModel: {
+    type: String,
+    enum: [
+      "static", "dynamic"
+    ],
+    default: "static"
+  }
+}, {
+  timestamps: true,
+  toJSON: {
+    virtuals: true
+  },
+  toObject: {
+    virtuals: true
+  }
+});
+
+// Indexes for efficient querying (consolidated here)
+roomSchema.index({service: 1});
+roomSchema.index({roomType: 1});
+roomSchema.index({isAvailable: 1});
+roomSchema.index({tags: 1});
+roomSchema.index({amenities: 1});
+roomSchema.index({"images.isFeatured": 1});
+
+// Virtual for total capacity
+roomSchema.virtual("totalCapacity").get(function () {
+  return this.capacity.adults + this.capacity.children;
+});
 
 const Room = mongoose.model("Room", roomSchema);
 

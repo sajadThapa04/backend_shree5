@@ -412,6 +412,63 @@ const getAllHostsByStatus = asyncHandler(async (req, res) => {
   }
 });
 
+// Admin-only: Delete admin account (Superadmin only)
+const deleteAdmin = asyncHandler(async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    logger.info("Starting deleteAdmin process");
+
+    const {adminId} = req.params;
+
+    // 1. Authorization Check
+    if (req.admin.role !== "superadmin") {
+      logger.error("Unauthorized: Only superadmin can delete admin accounts");
+      throw new ApiError(403, "Unauthorized: Only superadmin can delete admin accounts");
+    }
+
+    // 2. Validate admin ID
+    if (!mongoose.Types.ObjectId.isValid(adminId)) {
+      logger.error("Invalid admin ID");
+      throw new ApiError(400, "Invalid admin ID");
+    }
+
+    // 3. Prevent self-deletion
+    if (adminId === req.admin._id.toString()) {
+      logger.error("Superadmin cannot delete themselves");
+      throw new ApiError(400, "Superadmin cannot delete themselves");
+    }
+
+    // 4. Find and delete admin
+    const adminToDelete = await Admin.findByIdAndDelete(adminId).session(session);
+
+    if (!adminToDelete) {
+      logger.error("Admin not found");
+      throw new ApiError(404, "Admin not found");
+    }
+
+    // 5. Commit transaction
+    await session.commitTransaction();
+    logger.info(`Admin ${adminToDelete.email} deleted successfully`);
+
+    res.status(200).json(new ApiResponse(200, {}, "Admin account deleted successfully"));
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Error in deleteAdmin: ${error.message}`, {stack: error.stack});
+
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    if (error.name === "CastError") {
+      throw new ApiError(400, "Invalid admin ID");
+    }
+    throw new ApiError(500, error.message || "Failed to delete admin account");
+  } finally {
+    session.endSession();
+  }
+});
+
 export {
   createSuperadmin,
   createAdmin,
@@ -419,5 +476,6 @@ export {
   logoutAdmin,
   updateHostStatus,
   getAllHostsByStatus,
-  refreshAdminToken
+  refreshAdminToken,
+  deleteAdmin
 };

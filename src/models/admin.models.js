@@ -32,7 +32,22 @@ const adminSchema = new Schema({
     default: "admin"
   },
   permissions: {
-    // ... (keep your existing permissions structure)
+    manageUsers: {
+      type: Boolean,
+      default: false
+    },
+    manageHosts: {
+      type: Boolean,
+      default: true
+    },
+    manageContent: {
+      type: Boolean,
+      default: true
+    },
+    manageSettings: {
+      type: Boolean,
+      default: false
+    }
   },
   lastLogin: Date,
   loginIP: String,
@@ -77,6 +92,8 @@ adminSchema.methods.generateRefreshToken = function () {
     expiresIn: process.env.ADMIN_REFRESH_TOKEN_EXPIRY || "7d"
   });
 };
+
+
 
 const Admin = mongoose.model("Admin", adminSchema);
 

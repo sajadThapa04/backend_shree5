@@ -7,7 +7,9 @@ import {
   getAllRestaurants,
   getRestaurantsByService,
   uploadRestaurantImages,
-  updateRestaurantImages
+  updateRestaurantImages,
+  uploadCuisineImages,
+  deleteCuisineImage
 } from "../controllers/restaurants.controller.js";
 import {upload} from "../middlewares/multer.middlewares.js";
 import {verifyJwt} from "../middlewares/auth.middlewares.js";
@@ -37,5 +39,12 @@ router.post("/:id/images", verifyJwt, upload.array("images", 10), uploadRestaura
 
 // Update images for a restaurant (Requires JWT verification)
 router.patch("/:id/images", verifyJwt, upload.array("images", 10), updateRestaurantImages);
+
+// Upload cuisine image (Requires JWT verification)
+router.post("/:id/cuisine/:cuisineId/image", verifyJwt, upload.single("image"), // Single file upload for cuisine image
+    uploadCuisineImages);
+
+// Delete cuisine image (Requires JWT verification)
+router.delete("/:id/cuisine/:cuisineId/image", verifyJwt, deleteCuisineImage);
 
 export default router;

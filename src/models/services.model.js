@@ -13,45 +13,84 @@ const serviceSchema = new Schema({
     type: String,
     required: true,
     trim: true,
-    maxlength: 100 // Limit the length of the service name
+    maxlength: 100
   },
 
-  // Type of service (aligned with Host's listingType)
+  // Type of service
   type: {
     type: String,
     enum: [
-      "restaurant", // Dining places
-      "hotel", // Hotel accommodations
-      "lodge", // Basic accommodations
-      "home_stay", // Private homes for rent
-      "luxury_villa", // High-end accommodations
-      "other" // Generic fallback
+      "restaurant",
+      "hotel",
+      "lodge",
+      "home_stay",
+      "luxury_villa",
+      "other"
     ],
     required: true
   },
 
-  // Capacity details
-  capacity: {
-    type: Number,
-    required: true,
-    min: [1, "Capacity must be at least 1."]
-  },
-
-  // Amenities
-  amenities: [
-    {
+  // Address details (added from Host model)
+  address: {
+    country: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    city: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    street: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    zipCode: {
       type: String,
       trim: true
+    },
+    coordinates: {
+      type: {
+        type: String,
+        default: "Point"
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        required: true,
+        validate: {
+          validator: function (coords) {
+            return (Array.isArray(coords) && coords.length === 2 && typeof coords[0] === "number" && typeof coords[1] === "number");
+          },
+          message: "Coordinates must be an array of [longitude, latitude]"
+        }
+      }
     }
-  ],
+  },
 
-  // Images
-  images: [
-    {
-      type: String, // URLs to images
-      trim: true
-    }
-  ],
+  // Capacity details
+  // capacity: {
+  //   type: Number,
+  //   required: true,
+  //   min: [1, "Capacity must be at least 1."]
+  // },
+
+  //  Amenities
+  // amenities: [
+  //   {
+  //     type: String,
+  //     trim: true
+  //   }
+  // ],
+
+  //  Images
+  // images: [
+  //   {
+  //     type: String,
+  //     trim: true
+  //   }
+  // ],
 
   // Availability
   isAvailable: {
@@ -60,9 +99,16 @@ const serviceSchema = new Schema({
   }
 }, {timestamps: true});
 
-// Index for efficient querying
-serviceSchema.index({host: 1}); // Index for host reference
-serviceSchema.index({type: 1}); // Index for service type
+// Indexes
+serviceSchema.index({host: 1});
+serviceSchema.index({type: 1});
+serviceSchema.index({"address.coordinates": "2dsphere"});
+serviceSchema.index({
+  name: 1,
+  "address.city": 1
+}, {unique: true});
+// we are chaning the name from unique true to using
+//  this schema so that we will allow allow duplicate service names but only across different cities.
 
 const Service = mongoose.model("Service", serviceSchema);
 

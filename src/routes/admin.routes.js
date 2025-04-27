@@ -6,7 +6,8 @@ import {
   logoutAdmin,
   refreshAdminToken,
   updateHostStatus,
-  getAllHostsByStatus
+  getAllHostsByStatus,
+  deleteAdmin
 } from "../controllers/admin.controller.js";
 import {verifyAdminJwt, verifyAdminRefreshToken} from "../middlewares/admin.auth.middlewares.js";
 
@@ -21,6 +22,7 @@ router.route("/refresh-token").post(verifyAdminRefreshToken, refreshAdminToken);
 router.use(verifyAdminJwt);
 
 router.route("/create-admin").post(createAdmin);
+router.route("/:adminId").delete(deleteAdmin); // DELETE /api/v1/admin/:adminId
 router.route("/logout").post(logoutAdmin);
 router.route("/:hostId/status").patch(updateHostStatus);
 router.route("/").get(getAllHostsByStatus);

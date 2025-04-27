@@ -12,39 +12,48 @@ const restaurantSchema = new Schema({
   },
 
   // Restaurant Name
-  name: {
-    type: String,
-    required: [
-      true, "Restaurant name is required."
-    ],
-    trim: true,
-    maxlength: [
-      100, "Restaurant name cannot exceed 100 characters."
-    ],
-    lowercase: true,
-    unique: true // Ensure restaurant names are unique
-  },
+  //commenting this line we are using it from the services field
+  // name: {
+  //   type: String,
+  //   required: [
+  //     true, "Restaurant name is required."
+  //   ],
+  //   trim: true,
+  //   maxlength: [
+  //     100, "Restaurant name cannot exceed 100 characters."
+  //   ],
+  //   lowercase: true,
+  //   unique: true  Ensure restaurant names are unique
+  // },
 
-  // Cuisine Type (e.g., Nepali, Indian, Italian, Chinese)
-  cuisineType: [
+  // Cuisine Details with individual prices and images
+  cuisineDetails: [
     {
-      type: String,
-      trim: true,
-      required: [
-        true, "Cuisine type is required."
-      ],
-      minlength: [2, "Cuisine type must have at least 2 characters."]
+      name: {
+        type: String,
+        trim: true,
+        required: [
+          true, "Cuisine name is required."
+        ],
+        minlength: [
+          2, "Cuisine name must have at least 2 characters."
+        ],
+        lowercase: true
+      },
+      price: {
+        type: Number,
+        required: [
+          true, "Price is required for each cuisine."
+        ],
+        min: [0, "Price cannot be negative."]
+      },
+      image: {
+        type: String,
+        trim: true,
+        match: [/^(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))$/i, "Image URL must be valid and end with png, jpg, jpeg, gif, or webp."]
+      }
     }
   ],
-
-  // Pricing Per Meal
-  pricePerMeal: {
-    type: Number,
-    required: [
-      true, "Price per meal is required."
-    ],
-    min: [0, "Price per meal cannot be negative."]
-  },
 
   // Seating Capacity
   seatingCapacity: {
@@ -64,123 +73,39 @@ const restaurantSchema = new Schema({
     }
   ],
 
-  // Day-specific Opening and Closing Times
-  openingHours: {
-    monday: {
-      openingTime: {
+  // Day-specific Opening and Closing Times as an array
+  openingHours: [
+    {
+      day: {
         type: String,
-        required: [
-          true, "Monday opening time is required."
+        enum: [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday"
         ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
+        required: true
       },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Monday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    tuesday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Tuesday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Tuesday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    wednesday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Wednesday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Wednesday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    thursday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Thursday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Thursday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    friday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Friday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Friday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    saturday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Saturday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Saturday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
-    },
-    sunday: {
-      openingTime: {
-        type: String,
-        required: [
-          true, "Sunday opening time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format (e.g., 08:00)."]
-      },
-      closingTime: {
-        type: String,
-        required: [
-          true, "Sunday closing time is required."
-        ],
-        match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format (e.g., 22:00)."]
-      }
+      timeSlots: [
+        {
+          openingTime: {
+            type: String,
+            required: true,
+            match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Opening time must be in HH:mm format."]
+          },
+          closingTime: {
+            type: String,
+            required: true,
+            match: [/^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/, "Closing time must be in HH:mm format."]
+          }
+        }
+      ]
     }
-  },
-
-  // Image URLs
+  ],
+  // General Image URLs (for the restaurant as a whole)
   images: [
     {
       type: String,
@@ -196,6 +121,14 @@ const restaurantSchema = new Schema({
     index: true // Index for better querying
   }
 }, {timestamps: true});
+
+
+restaurantSchema.virtual("serviceName", {
+  ref: "Service",
+  localField: "service",
+  foreignField: "_id",
+  justOne: true
+});
 
 // Create and export the model
 const Restaurant = mongoose.model("Restaurant", restaurantSchema);

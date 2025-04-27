@@ -4,113 +4,216 @@ import {ApiResponse} from "../utils/ApiResponse.js";
 import {Room} from "../models/room.model.js";
 import {Service} from "../models/services.model.js";
 import {Host} from "../models/host.model.js";
+import {User} from "../models/user.model.js";
 import logger from "../utils/logger.js";
 import {uploadOnCloudinary, deleteFromCloudinary} from "../utils/cloudinary.js";
 import mongoose from "mongoose";
 // Create a new room
 
 const createRoom = asyncHandler(async (req, res) => {
+  const startTime = Date.now();
+  const requestId = req.requestId || mongoose.Types.ObjectId().toString();
+  
   try {
-    // Destructure and validate input data
+    logger.info(`[${requestId}] Starting room creation process`, {
+      action: 'createRoom',
+      userId: req.user?._id,
+      body: req.body
+    });
+
     const {
-      service,
       name,
       roomType,
       pricePerNight,
       capacity,
       amenities,
-      isAvailable
+      isAvailable,
+      openingHours
     } = req.body;
 
-    // Log the incoming request body for debugging
-    logger.info("Incoming request body:", req.body);
-
-    // Check for required fields
-    if (!service || !name || !roomType || !pricePerNight || !capacity) {
-      logger.error("Missing required fields in request body.");
+    // Validate required fields
+    if (!name || !roomType || !pricePerNight || !capacity) {
+      logger.warn(`[${requestId}] Missing required fields`, { 
+        missingFields: {
+          name: !name,
+          roomType: !roomType,
+          pricePerNight: !pricePerNight,
+          capacity: !capacity
+        }
+      });
       throw new ApiError(400, "All required fields must be provided.");
     }
 
     // Validate room type
     const validRoomTypes = ["single", "double", "suite", "other"];
     if (!validRoomTypes.includes(roomType)) {
-      logger.error(`Invalid room type provided: ${roomType}`);
+      logger.warn(`[${requestId}] Invalid room type provided`, { 
+        roomType,
+        validRoomTypes 
+      });
       throw new ApiError(400, "Invalid room type.");
     }
 
     // Validate price per night
     if (pricePerNight < 0) {
-      logger.error(`Invalid price per night provided: ${pricePerNight}`);
+      logger.warn(`[${requestId}] Invalid price per night`, { pricePerNight });
       throw new ApiError(400, "Price per night cannot be negative.");
     }
 
     // Validate capacity
     if (capacity < 1) {
-      logger.error(`Invalid capacity provided: ${capacity}`);
+      logger.warn(`[${requestId}] Invalid capacity`, { capacity });
       throw new ApiError(400, "Capacity must be at least 1.");
     }
 
-    // Check if the service exists
-    const existingService = await Service.findById(service);
-    if (!existingService) {
-      logger.error(`Service not found with ID: ${service}`);
-      throw new ApiError(404, "Service not found.");
+    // Validate openingHours if provided
+    if (openingHours) {
+      const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+      const openingHoursMap = {};
+
+      for (const day of openingHours) {
+        if (!days.includes(day.day)) {
+          logger.warn(`[${requestId}] Invalid day in opening hours`, { day });
+          throw new ApiError(400, `Invalid day: ${day.day}`);
+        }
+
+        if (!day.openingTime || !day.closingTime) {
+          logger.warn(`[${requestId}] Missing opening/closing times`, { day });
+          throw new ApiError(400, `Opening and closing times for ${day.day} are required.`);
+        }
+
+        const timeRegex = /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/;
+        if (!timeRegex.test(day.openingTime) || !timeRegex.test(day.closingTime)) {
+          logger.warn(`[${requestId}] Invalid time format`, { 
+            day: day.day,
+            openingTime: day.openingTime,
+            closingTime: day.closingTime
+          });
+          throw new ApiError(400, `Times for ${day.day} must be in HH:mm format.`);
+        }
+
+        openingHoursMap[day.day] = day;
+      }
+
+      for (const day of days) {
+        if (!openingHoursMap[day]) {
+          logger.warn(`[${requestId}] Missing opening hours for day`, { day });
+          throw new ApiError(400, `Opening hours for ${day} are required.`);
+        }
+      }
     }
 
-    // Check if the authenticated user is authorized to create the room
-    const userId = req.user
-      ?._id; // Authenticated user's ID
+    // Get authenticated user
+    const userId = req.user?._id;
     if (!userId) {
-      logger.error("User not authenticated.");
+      logger.warn(`[${requestId}] Unauthenticated user attempt`);
       throw new ApiError(401, "User not authenticated.");
     }
 
-    // Fetch the host associated with the service
-    const host = await Host.findById(existingService.host);
-    if (!host) {
-      logger.error(`Host not found for service ID: ${service}`);
-      throw new ApiError(404, "Host not found.");
+    // Find the user with host profile
+    const user = await User.findById(userId);
+    if (!user) {
+      logger.warn(`[${requestId}] User not found`, { userId });
+      throw new ApiError(404, "User not found.");
     }
 
-    // Check if the authenticated user is the owner of the host profile
-    if (host.user.toString() !== userId.toString()) {
-      logger.error(`User ${userId} is not authorized to create a room for service ${service}`);
-      throw new ApiError(403, "You are not authorized to create a room for this service.");
+    logger.debug(`[${requestId}] User found`, { 
+      userId: user._id,
+      role: user.role,
+      hostProfile: user.hostProfile 
+    });
+
+    // If user is a host but hostProfile is null, try to find existing host
+    if (user.role === "host" && !user.hostProfile) {
+      const existingHost = await Host.findOne({ user: userId });
+      if (existingHost) {
+        user.hostProfile = existingHost._id;
+        await user.save();
+        logger.info(`[${requestId}] Associated existing host profile with user`, {
+          hostId: existingHost._id,
+          userId: user._id
+        });
+      }
     }
+
+    // Final check for host profile
+    if (!user.hostProfile) {
+      logger.warn(`[${requestId}] User missing host profile`, { userId: user._id });
+      throw new ApiError(403, {
+        message: "Please complete your host profile first",
+        steps: ["1. Go to your profile settings", "2. Click on 'Become a Host'", "3. Fill out the host profile form", "4. Submit and verify your host profile"]
+      });
+    }
+
+    // Verify host exists
+    const host = await Host.findById(user.hostProfile);
+    if (!host) {
+      logger.error(`[${requestId}] Host profile not found but reference exists`, {
+        userId: user._id,
+        hostProfileId: user.hostProfile
+      });
+      await User.findByIdAndUpdate(userId, { $unset: { hostProfile: 1 } });
+      throw new ApiError(404, "Host profile not found. Please recreate your host profile.");
+    }
+
+    logger.debug(`[${requestId}] Host profile verified`, { hostId: host._id });
+
+    // Find the appropriate service
+    const service = await Service.findOne({
+      host: host._id,
+      type: { $in: ["hotel", "lodge", "home_stay", "luxury_villa"] }
+    });
+
+    if (!service) {
+      logger.warn(`[${requestId}] No valid service found for host`, { hostId: host._id });
+      throw new ApiError(403, {
+        message: "Please create a hotel or lodge service first",
+        steps: ["1. Go to the 'Services' section", "2. Click on 'Add New Service'", "3. Select 'Hotel' or 'Lodge' as service type", "4. Fill out the required details", "5. Submit the form to create your service"]
+      });
+    }
+
+    logger.debug(`[${requestId}] Service found for room creation`, {
+      serviceId: service._id,
+      serviceType: service.type
+    });
 
     // Create the room object
     const room = new Room({
-      service,
+      service: service._id,
       name,
       roomType,
       pricePerNight,
       capacity,
-      amenities: amenities || [], // Default to an empty array if not provided
-      isAvailable: isAvailable !== undefined
-        ? isAvailable
-        : true // Default to true if not provided
+      amenities: amenities || [],
+      isAvailable: isAvailable !== undefined ? isAvailable : true,
+      openingHours: openingHours || []
     });
 
-    // Save the room to the database
     const savedRoom = await room.save();
-    if (!savedRoom) {
-      logger.error("Failed to save the room to the database.");
-      throw new ApiError(500, "Failed to save the room to the database.");
-    }
+    
+    logger.info(`[${requestId}] Room created successfully`, {
+      roomId: savedRoom._id,
+      serviceId: savedRoom.service,
+      duration: `${Date.now() - startTime}ms`
+    });
 
-    // Log the successful creation of the room
-    logger.info(`Room created successfully with ID: ${savedRoom._id}`);
-
-    // Return the created room
     res.status(201).json(new ApiResponse(201, savedRoom, "Room created successfully."));
   } catch (error) {
-    // Handle duplicate key error for room name
-    if (
-      error.code === 11000 && error.keyPattern
-      ?.name) {
+    if (error.code === 11000 && error.keyPattern?.name) {
+      logger.warn(`[${requestId}] Duplicate room name`, { 
+        name: req.body.name,
+        error: error.message 
+      });
       throw new ApiError(400, "A room with this name already exists.");
     }
-    throw error; // Re-throw other errors
+    
+    logger.error(`[${requestId}] Room creation failed`, {
+      error: error.message,
+      stack: error.stack,
+      duration: `${Date.now() - startTime}ms`
+    });
+    
+    throw error;
   }
 });
 
