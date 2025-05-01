@@ -11,74 +11,95 @@ import mongoose from "mongoose";
 
 // Create a new restaurant
 const createRestaurant = asyncHandler(async (req, res) => {
-  const startTime = Date.now();
-  const requestId = req.requestId || mongoose.Types.ObjectId().toString();
-
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
-    logger.info(`[${requestId}] Starting restaurant creation process`, {
-      action: "createRestaurant",
-      userId: req.user
-        ?._id,
-      body: req.body
-    });
+    const {
+      cuisineDetails,
+      seatingCapacity,
+      openingHours,
+      amenities,
+      isAvailable,
+      service
+    } = req.body;
+    const userId = req.user
+      ?._id;
 
-    const {cuisineDetails, seatingCapacity, openingHours, amenities, isAvailable} = req.body;
+    logger.info(`Starting createRestaurant process for user: ${userId}`);
 
-    // Validate required fields (removed name validation)
-    if (!cuisineDetails || !seatingCapacity || !openingHours) {
-      logger.warn(`[${requestId}] Missing required fields`, {
-        missingFields: {
-          cuisineDetails: !cuisineDetails,
-          seatingCapacity: !seatingCapacity,
-          openingHours: !openingHours
-        }
-      });
+    // Validate required fields
+    if (!cuisineDetails || !seatingCapacity || !openingHours || !service) {
+      logger.error("Missing required fields");
       throw new ApiError(400, "All required fields must be provided.");
     }
 
-    // Validate cuisineDetails array (unchanged)
+    // Verify the service exists and belongs to the host
+    const existingService = await Service.findById(service);
+    if (!existingService) {
+      logger.error(`Service not found: ${service}`);
+      throw new ApiError(404, "Service not found");
+    }
+
+    // Verify service ownership
+    const host = await Host.findOne({user: userId});
+    if (!host || !existingService.host.equals(host._id)) {
+      logger.error(`Service ownership verification failed for user: ${userId}`);
+      throw new ApiError(403, "You don't have permission to use this service");
+    }
+
+    // Check if a restaurant already exists at these coordinates
+    const coordinates = existingService.address.coordinates.coordinates;
+    const existingRestaurant = await Restaurant.aggregate([
+      {
+        $lookup: {
+          from: "services",
+          localField: "service",
+          foreignField: "_id",
+          as: "serviceData"
+        }
+      }, {
+        $unwind: "$serviceData"
+      }, {
+        $match: {
+          "serviceData.address.coordinates.coordinates": coordinates
+        }
+      }
+    ]).session(session);
+
+    if (existingRestaurant.length > 0) {
+      logger.error(`Restaurant already exists at coordinates: [${coordinates}]`);
+      throw new ApiError(400, "A restaurant already exists at this location");
+    }
+
+    // Validate cuisineDetails array
     if (!Array.isArray(cuisineDetails) || cuisineDetails.length === 0) {
-      logger.warn(`[${requestId}] Invalid cuisine details`, {
-        cuisineDetailsLength: cuisineDetails
-          ?.length
-      });
+      logger.error("Invalid cuisine details array");
       throw new ApiError(400, "At least one cuisine detail is required.");
     }
 
-    // Validate each cuisine detail (unchanged)
+    // Validate each cuisine detail
     for (const cuisine of cuisineDetails) {
       if (!cuisine.name || !cuisine.price) {
-        logger.warn(`[${requestId}] Invalid cuisine item`, {cuisine});
+        logger.error("Invalid cuisine item - missing name or price");
         throw new ApiError(400, "Each cuisine must have a name and price.");
       }
       if (cuisine.price < 0) {
-        logger.warn(`[${requestId}] Negative cuisine price`, {
-          cuisineName: cuisine.name,
-          price: cuisine.price
-        });
+        logger.error(`Negative price for cuisine: ${cuisine.name}`);
         throw new ApiError(400, "Cuisine price cannot be negative.");
       }
-      // Validate image URL if provided
       if (cuisine.image && !/^(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))$/i.test(cuisine.image)) {
+        logger.error(`Invalid image URL for cuisine: ${cuisine.name}`);
         throw new ApiError(400, "Cuisine image URL must be valid and end with png, jpg, jpeg, gif, or webp.");
       }
     }
 
-    // Validate seatingCapacity (unchanged)
+    // Validate seatingCapacity
     if (seatingCapacity < 1) {
-      logger.warn(`[${requestId}] Invalid seating capacity`, {seatingCapacity});
+      logger.error(`Invalid seating capacity: ${seatingCapacity}`);
       throw new ApiError(400, "Seating capacity must be at least 1.");
     }
 
-    // Validate openingHours array with timeSlots
-    if (!Array.isArray(openingHours) || openingHours.length === 0) {
-      logger.warn(`[${requestId}] Invalid opening hours`, {
-        openingHoursLength: openingHours
-          ?.length
-      });
-      throw new ApiError(400, "Opening hours are required for all days.");
-    }
-
+    // Validate openingHours
     const days = [
       "monday",
       "tuesday",
@@ -90,32 +111,31 @@ const createRestaurant = asyncHandler(async (req, res) => {
     ];
     const openingHoursMap = {};
 
+    if (!Array.isArray(openingHours) || openingHours.length === 0) {
+      logger.error("Invalid opening hours array");
+      throw new ApiError(400, "Opening hours are required for all days.");
+    }
+
     for (const day of openingHours) {
       if (!days.includes(day.day)) {
-        logger.warn(`[${requestId}] Invalid day in opening hours`, {day});
+        logger.error(`Invalid day in opening hours: ${day.day}`);
         throw new ApiError(400, `Invalid day: ${day.day}`);
       }
 
-      // Validate timeSlots array exists and has at least one slot
       if (!Array.isArray(day.timeSlots) || day.timeSlots.length === 0) {
-        logger.warn(`[${requestId}] Missing time slots for day`, {day});
+        logger.error(`Missing time slots for day: ${day.day}`);
         throw new ApiError(400, `At least one time slot is required for ${day.day}`);
       }
 
-      // Validate each time slot
       for (const slot of day.timeSlots) {
         if (!slot.openingTime || !slot.closingTime) {
-          logger.warn(`[${requestId}] Missing opening/closing times in slot`, {slot});
+          logger.error(`Missing opening/closing times for ${day.day}`);
           throw new ApiError(400, `Opening and closing times are required for each time slot on ${day.day}`);
         }
 
         const timeRegex = /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/;
         if (!timeRegex.test(slot.openingTime) || !timeRegex.test(slot.closingTime)) {
-          logger.warn(`[${requestId}] Invalid time format in slot`, {
-            day: day.day,
-            openingTime: slot.openingTime,
-            closingTime: slot.closingTime
-          });
+          logger.error(`Invalid time format for ${day.day}`);
           throw new ApiError(400, `Times for ${day.day} must be in HH:mm format.`);
         }
       }
@@ -126,16 +146,14 @@ const createRestaurant = asyncHandler(async (req, res) => {
     // Check all days are present
     for (const day of days) {
       if (!openingHoursMap[day]) {
-        logger.warn(`[${requestId}] Missing opening hours for day`, {day});
+        logger.error(`Missing opening hours for day: ${day}`);
         throw new ApiError(400, `Opening hours for ${day} are required.`);
       }
     }
 
-    // [Rest of the user/host validation remains the same...]
-
-    // Create the restaurant (removed name field)
+    // Create the restaurant
     const restaurant = new Restaurant({
-      service: service._id,
+      service: existingService._id,
       cuisineDetails,
       seatingCapacity,
       openingHours,
@@ -147,21 +165,21 @@ const createRestaurant = asyncHandler(async (req, res) => {
 
     const savedRestaurant = await restaurant.save();
 
-    logger.info(`[${requestId}] Restaurant created successfully`, {
-      restaurantId: savedRestaurant._id,
-      serviceId: savedRestaurant.service,
-      duration: `${Date.now() - startTime}ms`
-    });
-
+    logger.info(`Restaurant created successfully for service: ${existingService._id}`);
     res.status(201).json(new ApiResponse(201, savedRestaurant, "Restaurant created successfully."));
   } catch (error) {
-    // Removed duplicate name check since name field is removed
-    logger.error(`[${requestId}] Restaurant creation failed`, {
-      error: error.message,
-      stack: error.stack,
-      duration: `${Date.now() - startTime}ms`
-    });
-    throw error;
+    logger.error(`Error in createRestaurant: ${error.message}`, {stack: error.stack});
+
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    if (error.name === "ValidationError") {
+      throw new ApiError(400, error.message);
+    }
+    if (error.code === 11000) {
+      throw new ApiError(400, "Duplicate field value entered");
+    }
+    throw new ApiError(500, error.message || "Failed to create restaurant");
   }
 });
 
