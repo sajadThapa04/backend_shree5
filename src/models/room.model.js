@@ -113,6 +113,23 @@ const roomSchema = new Schema({
     }
   },
 
+  // Track booked dates
+  bookedDates: [
+    {
+      checkInDate: {
+        type: Date,
+        required: true
+      },
+      checkOutDate: {
+        type: Date,
+        required: true
+      },
+      booking: {
+        type: Schema.Types.ObjectId,
+        ref: "Booking"
+      }
+    }
+  ],
   // Room features
   size: {
     type: Number,

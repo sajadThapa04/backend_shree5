@@ -32,7 +32,7 @@ router.get("/", getAllRestaurants);
 router.get("/:id", verifyJwt,getRestaurantById);
 
 // Fetch restaurants by service ID
-router.get("/service/:serviceId", getRestaurantsByService);
+router.get("/service/:serviceId",verifyJwt, getRestaurantsByService);
 
 // Upload images for a restaurant (Requires JWT verification)
 router.post("/:id/images", verifyJwt, upload.array("images", 10), uploadRestaurantImages);

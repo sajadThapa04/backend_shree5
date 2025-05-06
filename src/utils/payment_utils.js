@@ -64,10 +64,13 @@ export const validatePaymentFields = payment => {
     logger.error("Invalid amount provided");
     throw new Error("Invalid amount");
   }
-  if (!payment.transactionId) {
-    logger.error("Transaction ID is missing");
-    throw new Error("Transaction ID is required");
+
+  // Only validate transactionId for non-Stripe payments
+  if (payment.paymentMethod !== "stripe" && !payment.transactionId) {
+    logger.error("Transaction ID is missing for non-Stripe payment");
+    throw new Error("Transaction ID is required for non-Stripe payments");
   }
+
   if (!payment.paymentMethod) {
     logger.error("Payment method is missing");
     throw new Error("Payment method is required");

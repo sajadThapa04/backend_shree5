@@ -11,209 +11,246 @@ import mongoose from "mongoose";
 // Create a new room
 
 const createRoom = asyncHandler(async (req, res) => {
-  const startTime = Date.now();
-  const requestId = req.requestId || mongoose.Types.ObjectId().toString();
-  
-  try {
-    logger.info(`[${requestId}] Starting room creation process`, {
-      action: 'createRoom',
-      userId: req.user?._id,
-      body: req.body
-    });
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
+  try {
     const {
       name,
       roomType,
+      description,
       pricePerNight,
       capacity,
+      size,
+      floorNumber,
+      hasPrivatePool,
+      bedType,
+      bathroomType,
       amenities,
+      tags,
+      images,
       isAvailable,
-      openingHours
+      openingHours,
+      pricingModel,
+      service
     } = req.body;
 
+    const userId = req.user
+      ?._id;
+
+    logger.info(`Starting room creation process for user: ${userId}`);
+
     // Validate required fields
-    if (!name || !roomType || !pricePerNight || !capacity) {
-      logger.warn(`[${requestId}] Missing required fields`, { 
-        missingFields: {
-          name: !name,
-          roomType: !roomType,
-          pricePerNight: !pricePerNight,
-          capacity: !capacity
-        }
-      });
+    if (!name || !roomType || pricePerNight === undefined || !capacity || !service) {
+      logger.error("Missing required fields");
       throw new ApiError(400, "All required fields must be provided.");
     }
 
+    // Verify the service exists and belongs to the host
+    const existingService = await Service.findById(service).session(session);
+    if (!existingService) {
+      logger.error(`Service not found: ${service}`);
+      throw new ApiError(404, "Service not found");
+    }
+
+    // Verify service ownership
+    const host = await Host.findOne({user: userId}).session(session);
+    if (!host || !existingService.host.equals(host._id)) {
+      logger.error(`Service ownership verification failed for user: ${userId}`);
+      throw new ApiError(403, "You don't have permission to use this service");
+    }
+
     // Validate room type
-    const validRoomTypes = ["single", "double", "suite", "other"];
+    const validRoomTypes = [
+      "single",
+      "double",
+      "twin",
+      "triple",
+      "queen",
+      "king",
+      "family",
+      "suite",
+      "presidential",
+      "dormitory",
+      "cottage",
+      "tent",
+      "penthouse",
+      "honeymoon",
+      "studio",
+      "shared",
+      "private",
+      "entire_home",
+      "other"
+    ];
+
     if (!validRoomTypes.includes(roomType)) {
-      logger.warn(`[${requestId}] Invalid room type provided`, { 
-        roomType,
-        validRoomTypes 
-      });
-      throw new ApiError(400, "Invalid room type.");
+      logger.error(`Invalid room type provided: ${roomType}`);
+      throw new ApiError(400, `Invalid room type. Valid types are: ${validRoomTypes.join(", ")}`);
     }
 
     // Validate price per night
     if (pricePerNight < 0) {
-      logger.warn(`[${requestId}] Invalid price per night`, { pricePerNight });
+      logger.error(`Invalid price per night: ${pricePerNight}`);
       throw new ApiError(400, "Price per night cannot be negative.");
     }
 
     // Validate capacity
-    if (capacity < 1) {
-      logger.warn(`[${requestId}] Invalid capacity`, { capacity });
-      throw new ApiError(400, "Capacity must be at least 1.");
+    if (!capacity.adults || capacity.adults < 1) {
+      logger.error(`Invalid adult capacity: ${capacity.adults}`);
+      throw new ApiError(400, "Must accommodate at least 1 adult.");
+    }
+
+    if (capacity.children && capacity.children < 0) {
+      logger.error(`Invalid children capacity: ${capacity.children}`);
+      throw new ApiError(400, "Children capacity cannot be negative.");
+    }
+
+    // Validate room features
+    if (size !== undefined && size < 0) {
+      logger.error(`Invalid room size: ${size}`);
+      throw new ApiError(400, "Room size cannot be negative.");
+    }
+
+    if (floorNumber !== undefined && floorNumber < 0) {
+      logger.error(`Invalid floor number: ${floorNumber}`);
+      throw new ApiError(400, "Floor number cannot be negative.");
+    }
+
+    // Validate bed type
+    const validBedTypes = [
+      "king",
+      "queen",
+      "double",
+      "single",
+      "bunk",
+      "floor_mattress",
+      "other"
+    ];
+    if (bedType && !validBedTypes.includes(bedType)) {
+      logger.error(`Invalid bed type: ${bedType}`);
+      throw new ApiError(400, `Invalid bed type. Valid types are: ${validBedTypes.join(", ")}`);
+    }
+
+    // Validate bathroom type
+    const validBathroomTypes = ["shared", "private", "ensuite"];
+    if (bathroomType && !validBathroomTypes.includes(bathroomType)) {
+      logger.error(`Invalid bathroom type: ${bathroomType}`);
+      throw new ApiError(400, `Invalid bathroom type. Valid types are: ${validBathroomTypes.join(", ")}`);
+    }
+
+    // Validate pricing model
+    const validPricingModels = ["static", "dynamic"];
+    if (pricingModel && !validPricingModels.includes(pricingModel)) {
+      logger.error(`Invalid pricing model: ${pricingModel}`);
+      throw new ApiError(400, `Invalid pricing model. Valid models are: ${validPricingModels.join(", ")}`);
     }
 
     // Validate openingHours if provided
     if (openingHours) {
-      const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+      const days = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
+      ];
       const openingHoursMap = {};
 
       for (const day of openingHours) {
         if (!days.includes(day.day)) {
-          logger.warn(`[${requestId}] Invalid day in opening hours`, { day });
+          logger.error(`Invalid day in opening hours: ${day.day}`);
           throw new ApiError(400, `Invalid day: ${day.day}`);
         }
 
-        if (!day.openingTime || !day.closingTime) {
-          logger.warn(`[${requestId}] Missing opening/closing times`, { day });
-          throw new ApiError(400, `Opening and closing times for ${day.day} are required.`);
+        if (!day.timeSlots || !Array.isArray(day.timeSlots)) {
+          logger.error(`Missing time slots for day: ${day.day}`);
+          throw new ApiError(400, `Time slots array is required for ${day.day}`);
         }
 
-        const timeRegex = /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/;
-        if (!timeRegex.test(day.openingTime) || !timeRegex.test(day.closingTime)) {
-          logger.warn(`[${requestId}] Invalid time format`, { 
-            day: day.day,
-            openingTime: day.openingTime,
-            closingTime: day.closingTime
-          });
-          throw new ApiError(400, `Times for ${day.day} must be in HH:mm format.`);
+        for (const slot of day.timeSlots) {
+          if (!slot.openingTime || !slot.closingTime) {
+            logger.error(`Missing opening/closing times for ${day.day}`);
+            throw new ApiError(400, `Both opening and closing times are required for ${day.day}`);
+          }
+
+          const timeRegex = /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeRegex.test(slot.openingTime) || !timeRegex.test(slot.closingTime)) {
+            logger.error(`Invalid time format for ${day.day}`);
+            throw new ApiError(400, `Times for ${day.day} must be in HH:mm format.`);
+          }
         }
 
         openingHoursMap[day.day] = day;
       }
 
+      // Check if all days are covered if openingHours is provided
       for (const day of days) {
         if (!openingHoursMap[day]) {
-          logger.warn(`[${requestId}] Missing opening hours for day`, { day });
+          logger.error(`Missing opening hours for day: ${day}`);
           throw new ApiError(400, `Opening hours for ${day} are required.`);
         }
       }
     }
 
-    // Get authenticated user
-    const userId = req.user?._id;
-    if (!userId) {
-      logger.warn(`[${requestId}] Unauthenticated user attempt`);
-      throw new ApiError(401, "User not authenticated.");
-    }
-
-    // Find the user with host profile
-    const user = await User.findById(userId);
-    if (!user) {
-      logger.warn(`[${requestId}] User not found`, { userId });
-      throw new ApiError(404, "User not found.");
-    }
-
-    logger.debug(`[${requestId}] User found`, { 
-      userId: user._id,
-      role: user.role,
-      hostProfile: user.hostProfile 
-    });
-
-    // If user is a host but hostProfile is null, try to find existing host
-    if (user.role === "host" && !user.hostProfile) {
-      const existingHost = await Host.findOne({ user: userId });
-      if (existingHost) {
-        user.hostProfile = existingHost._id;
-        await user.save();
-        logger.info(`[${requestId}] Associated existing host profile with user`, {
-          hostId: existingHost._id,
-          userId: user._id
-        });
+    // Validate images structure if provided
+    if (images && Array.isArray(images)) {
+      for (const image of images) {
+        if (!image.url) {
+          logger.error("Image missing URL");
+          throw new ApiError(400, "All images must have a URL.");
+        }
       }
     }
 
-    // Final check for host profile
-    if (!user.hostProfile) {
-      logger.warn(`[${requestId}] User missing host profile`, { userId: user._id });
-      throw new ApiError(403, {
-        message: "Please complete your host profile first",
-        steps: ["1. Go to your profile settings", "2. Click on 'Become a Host'", "3. Fill out the host profile form", "4. Submit and verify your host profile"]
-      });
-    }
-
-    // Verify host exists
-    const host = await Host.findById(user.hostProfile);
-    if (!host) {
-      logger.error(`[${requestId}] Host profile not found but reference exists`, {
-        userId: user._id,
-        hostProfileId: user.hostProfile
-      });
-      await User.findByIdAndUpdate(userId, { $unset: { hostProfile: 1 } });
-      throw new ApiError(404, "Host profile not found. Please recreate your host profile.");
-    }
-
-    logger.debug(`[${requestId}] Host profile verified`, { hostId: host._id });
-
-    // Find the appropriate service
-    const service = await Service.findOne({
-      host: host._id,
-      type: { $in: ["hotel", "lodge", "home_stay", "luxury_villa"] }
-    });
-
-    if (!service) {
-      logger.warn(`[${requestId}] No valid service found for host`, { hostId: host._id });
-      throw new ApiError(403, {
-        message: "Please create a hotel or lodge service first",
-        steps: ["1. Go to the 'Services' section", "2. Click on 'Add New Service'", "3. Select 'Hotel' or 'Lodge' as service type", "4. Fill out the required details", "5. Submit the form to create your service"]
-      });
-    }
-
-    logger.debug(`[${requestId}] Service found for room creation`, {
-      serviceId: service._id,
-      serviceType: service.type
-    });
-
-    // Create the room object
+    // Create the room
     const room = new Room({
-      service: service._id,
+      service: existingService._id,
       name,
       roomType,
+      description: description || "",
       pricePerNight,
-      capacity,
+      capacity: {
+        adults: capacity.adults,
+        children: capacity.children || 0
+      },
+      size: size || undefined,
+      floorNumber: floorNumber || undefined,
+      hasPrivatePool: hasPrivatePool || false,
+      bedType: bedType || "queen",
+      bathroomType: bathroomType || "private",
       amenities: amenities || [],
-      isAvailable: isAvailable !== undefined ? isAvailable : true,
-      openingHours: openingHours || []
+      tags: tags || [],
+      images: images || [],
+      isAvailable: isAvailable !== undefined
+        ? isAvailable
+        : true,
+      openingHours: openingHours || [],
+      pricingModel: pricingModel || "static"
     });
 
-    const savedRoom = await room.save();
-    
-    logger.info(`[${requestId}] Room created successfully`, {
-      roomId: savedRoom._id,
-      serviceId: savedRoom.service,
-      duration: `${Date.now() - startTime}ms`
-    });
+    const savedRoom = await room.save({session});
 
+    await session.commitTransaction();
+    logger.info(`Room created successfully: ${savedRoom._id}`);
     res.status(201).json(new ApiResponse(201, savedRoom, "Room created successfully."));
   } catch (error) {
-    if (error.code === 11000 && error.keyPattern?.name) {
-      logger.warn(`[${requestId}] Duplicate room name`, { 
-        name: req.body.name,
-        error: error.message 
-      });
-      throw new ApiError(400, "A room with this name already exists.");
+    await session.abortTransaction();
+    logger.error(`Error in createRoom: ${error.message}`, {stack: error.stack});
+
+    if (error instanceof ApiError) {
+      throw error;
     }
-    
-    logger.error(`[${requestId}] Room creation failed`, {
-      error: error.message,
-      stack: error.stack,
-      duration: `${Date.now() - startTime}ms`
-    });
-    
-    throw error;
+    if (error.name === "ValidationError") {
+      throw new ApiError(400, error.message);
+    }
+    if (error.code === 11000) {
+      throw new ApiError(400, "A room with this name already exists");
+    }
+    throw new ApiError(500, error.message || "Failed to create room");
+  } finally {
+    session.endSession();
   }
 });
 
@@ -332,89 +369,177 @@ const getRoomsByType = asyncHandler(async (req, res) => {
 });
 
 const updateRoom = asyncHandler(async (req, res) => {
-  const {id} = req.params; // Room ID
-  const userId = req.user._id; // Authenticated user's ID
-  const updateData = req.body; // Data to update
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
+  try {
+    const { id } = req.params; // Room ID
+    const userId = req.user._id; // Authenticated user's ID
+    const updateData = req.body; // Data to update
 
-  logger.info(`Starting updateRoom process for room ID: ${id} by user ID: ${userId}`);
+    logger.info(`Starting room update process for room ID: ${id} by user ID: ${userId}`);
 
-  // Step 1: Validate the room ID
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    logger.error(`Invalid room ID: ${id}`);
-    throw new ApiError(400, "Invalid room ID.");
-  }
-
-  // Step 2: Fetch the room from the database
-  const room = await Room.findById(id);
-  if (!room) {
-    logger.error(`Room not found with ID: ${id}`);
-    throw new ApiError(404, "Room not found.");
-  }
-
-  // Step 3: Fetch the service associated with the room
-  const service = await Service.findById(room.service);
-  if (!service) {
-    logger.error(`Service not found for room ID: ${id}`);
-    throw new ApiError(404, "Service not found.");
-  }
-
-  // Step 4: Fetch the host associated with the service
-  const host = await Host.findById(service.host);
-  if (!host) {
-    logger.error(`Host not found for service ID: ${service._id}`);
-    throw new ApiError(404, "Host not found.");
-  }
-
-  // Step 5: Check if the authenticated user is authorized to update the room
-  if (host.user.toString() !== userId.toString()) {
-    logger.error(`User ${userId} is not authorized to update room ${id}`);
-    throw new ApiError(403, "You are not authorized to update this room.");
-  }
-
-  // Step 6: Validate update data (optional, based on your requirements)
-  if (updateData.pricePerNight && updateData.pricePerNight < 0) {
-    logger.error(`Invalid price per night provided: ${updateData.pricePerNight}`);
-    throw new ApiError(400, "Price per night cannot be negative.");
-  }
-
-  if (updateData.capacity && updateData.capacity < 1) {
-    logger.error(`Invalid capacity provided: ${updateData.capacity}`);
-    throw new ApiError(400, "Capacity must be at least 1.");
-  }
-
-  if (updateData.roomType) {
-    const validRoomTypes = ["single", "double", "suite", "other"];
-    if (!validRoomTypes.includes(updateData.roomType)) {
-      logger.error(`Invalid room type provided: ${updateData.roomType}`);
-      throw new ApiError(400, "Invalid room type.");
+    // Validate the room ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.error(`Invalid room ID: ${id}`);
+      throw new ApiError(400, "Invalid room ID.");
     }
-  }
 
-  // Step 7: Check for duplicate name if the name is being updated
-  if (updateData.name) {
-    const existingRoom = await Room.findOne({name: updateData.name});
-    if (existingRoom && existingRoom._id.toString() !== id) {
-      logger.error(`A room with the name "${updateData.name}" already exists.`);
-      throw new ApiError(400, "A room with this name already exists.");
+    // Fetch the room with session
+    const room = await Room.findById(id).session(session);
+    if (!room) {
+      logger.error(`Room not found with ID: ${id}`);
+      throw new ApiError(404, "Room not found.");
     }
+
+    // Fetch the service associated with the room
+    const service = await Service.findById(room.service).session(session);
+    if (!service) {
+      logger.error(`Service not found for room ID: ${id}`);
+      throw new ApiError(404, "Service not found.");
+    }
+
+    // Verify service ownership
+    const host = await Host.findOne({ user: userId }).session(session);
+    if (!host || !service.host.equals(host._id)) {
+      logger.error(`User ${userId} is not authorized to update room ${id}`);
+      throw new ApiError(403, "You are not authorized to update this room.");
+    }
+
+    // Validate update data
+    if (updateData.pricePerNight !== undefined && updateData.pricePerNight < 0) {
+      logger.error(`Invalid price per night: ${updateData.pricePerNight}`);
+      throw new ApiError(400, "Price per night cannot be negative.");
+    }
+
+    if (updateData.capacity) {
+      if (updateData.capacity.adults !== undefined && updateData.capacity.adults < 1) {
+        logger.error(`Invalid adult capacity: ${updateData.capacity.adults}`);
+        throw new ApiError(400, "Must accommodate at least 1 adult.");
+      }
+      if (updateData.capacity.children !== undefined && updateData.capacity.children < 0) {
+        logger.error(`Invalid children capacity: ${updateData.capacity.children}`);
+        throw new ApiError(400, "Children capacity cannot be negative.");
+      }
+    }
+
+    // Validate room type
+    const validRoomTypes = [
+      "single", "double", "twin", "triple", "queen", "king",
+      "family", "suite", "presidential", "dormitory", "cottage",
+      "tent", "penthouse", "honeymoon", "studio", "shared",
+      "private", "entire_home", "other"
+    ];
+    if (updateData.roomType && !validRoomTypes.includes(updateData.roomType)) {
+      logger.error(`Invalid room type: ${updateData.roomType}`);
+      throw new ApiError(400, `Invalid room type. Valid types are: ${validRoomTypes.join(', ')}`);
+    }
+
+    // Validate bed type
+    const validBedTypes = ["king", "queen", "double", "single", "bunk", "floor_mattress", "other"];
+    if (updateData.bedType && !validBedTypes.includes(updateData.bedType)) {
+      logger.error(`Invalid bed type: ${updateData.bedType}`);
+      throw new ApiError(400, `Invalid bed type. Valid types are: ${validBedTypes.join(', ')}`);
+    }
+
+    // Validate bathroom type
+    const validBathroomTypes = ["shared", "private", "ensuite"];
+    if (updateData.bathroomType && !validBathroomTypes.includes(updateData.bathroomType)) {
+      logger.error(`Invalid bathroom type: ${updateData.bathroomType}`);
+      throw new ApiError(400, `Invalid bathroom type. Valid types are: ${validBathroomTypes.join(', ')}`);
+    }
+
+    // Validate room features
+    if (updateData.size !== undefined && updateData.size < 0) {
+      logger.error(`Invalid room size: ${updateData.size}`);
+      throw new ApiError(400, "Room size cannot be negative.");
+    }
+
+    if (updateData.floorNumber !== undefined && updateData.floorNumber < 0) {
+      logger.error(`Invalid floor number: ${updateData.floorNumber}`);
+      throw new ApiError(400, "Floor number cannot be negative.");
+    }
+
+    // Check for duplicate name
+    if (updateData.name) {
+      const existingRoom = await Room.findOne({ name: updateData.name }).session(session);
+      if (existingRoom && existingRoom._id.toString() !== id) {
+        logger.error(`Duplicate room name: ${updateData.name}`);
+        throw new ApiError(400, "A room with this name already exists.");
+      }
+    }
+
+    // Validate openingHours if provided
+    if (updateData.openingHours) {
+      const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+      
+      if (!Array.isArray(updateData.openingHours) || updateData.openingHours.length === 0) {
+        logger.error("Invalid opening hours array");
+        throw new ApiError(400, "Opening hours are required for all days.");
+      }
+
+      for (const day of updateData.openingHours) {
+        if (!days.includes(day.day)) {
+          logger.error(`Invalid day in opening hours: ${day.day}`);
+          throw new ApiError(400, `Invalid day: ${day.day}`);
+        }
+
+        if (!day.timeSlots || !Array.isArray(day.timeSlots) || day.timeSlots.length === 0) {
+          logger.error(`Missing time slots for day: ${day.day}`);
+          throw new ApiError(400, `At least one time slot is required for ${day.day}`);
+        }
+
+        for (const slot of day.timeSlots) {
+          if (!slot.openingTime || !slot.closingTime) {
+            logger.error(`Missing opening/closing times for ${day.day}`);
+            throw new ApiError(400, `Both opening and closing times are required for ${day.day}`);
+          }
+
+          const timeRegex = /^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeRegex.test(slot.openingTime) || !timeRegex.test(slot.closingTime)) {
+            logger.error(`Invalid time format for ${day.day}`);
+            throw new ApiError(400, `Times for ${day.day} must be in HH:mm format.`);
+          }
+        }
+      }
+    }
+
+    // Update the room
+    const updatedRoom = await Room.findByIdAndUpdate(
+      id,
+      updateData,
+      {
+        new: true,
+        runValidators: true,
+        session
+      }
+    );
+
+    if (!updatedRoom) {
+      logger.error(`Failed to update room with ID: ${id}`);
+      throw new ApiError(500, "Failed to update the room.");
+    }
+
+    await session.commitTransaction();
+    logger.info(`Room updated successfully: ${updatedRoom._id}`);
+    res.status(200).json(new ApiResponse(200, updatedRoom, "Room updated successfully."));
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Error in updateRoom: ${error.message}`, { stack: error.stack });
+
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    if (error.name === "ValidationError") {
+      throw new ApiError(400, error.message);
+    }
+    if (error.code === 11000) {
+      throw new ApiError(400, "Duplicate field value entered");
+    }
+    throw new ApiError(500, error.message || "Failed to update room");
+  } finally {
+    session.endSession();
   }
-
-  // Step 8: Update the room details
-  const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {
-    new: true, // Return the updated document
-    runValidators: true // Run schema validators on update
-  });
-
-  if (!updatedRoom) {
-    logger.error(`Failed to update room with ID: ${id}`);
-    throw new ApiError(500, "Failed to update the room.");
-  }
-
-  // Step 9: Log the successful update
-  logger.info(`Room updated successfully with ID: ${id}`);
-
-  // Step 10: Return the updated room
-  res.status(200).json(new ApiResponse(200, updatedRoom, "Room updated successfully."));
 });
 
 const deleteRoom = asyncHandler(async (req, res) => {

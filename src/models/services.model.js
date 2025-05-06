@@ -96,6 +96,13 @@ const serviceSchema = new Schema({
   isAvailable: {
     type: Boolean,
     default: true
+  },
+  status: {
+    type: String,
+    enum: [
+      "active", "inactive", "pending", "rejected"
+    ],
+    default: "pending"
   }
 }, {timestamps: true});
 

@@ -17,8 +17,8 @@ export const uploadOnCloudinary = async LocalFilePath => {
       fetch_format: "auto", // Best format conversion
       transformation: [
         {
-          width: 500,
-          height: 500,
+          width: 1000,
+          height: 1000,
           crop: "fill",
           gravity: "face"
         } // Standardize dimensions

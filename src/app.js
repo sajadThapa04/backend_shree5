@@ -36,11 +36,13 @@ import userRouter from "./routes/user.routes.js";
 import hostRouter from "./routes/host.routes.js";
 import ratingRouter from "./routes/rating.routes.js";
 import reviewRouter from "./routes/review.routes.js";
-import bookingRouter from "./routes/booking.routes.js";
+import bookingRouter from "./routes/roombooking.routes.js";
+import restaurantBookingRouter from "./routes/restaurantsBooking.routes.js";
 import serviceRouter from "./routes/services.routes.js";
 import roomRouter from "./routes/room.routes.js";
 import restaurantRouter from "./routes/restaurant.routes.js";
 import paymentRouter from "./routes/payment.routes.js";
+import restaurantPaymentRouter from "./routes/restaurantPayment.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 
 //initialising router
@@ -48,11 +50,13 @@ app.use("/api/v1/users", userRouter); //user router
 app.use("/api/v1/hosts", hostRouter); //host router
 app.use("/api/v1/ratings", ratingRouter); // rating router
 app.use("/api/v1/reviews", reviewRouter); // review router
-app.use("/api/v1/bookings", bookingRouter); // booking router
+app.use("/api/v1/bookings", bookingRouter); // room booking router
+app.use("/api/v1/restaurantBooking", restaurantBookingRouter); // restaurant booking route
 app.use("/api/v1/services", serviceRouter); //service router
 app.use("/api/v1/rooms", roomRouter); //room routers
 app.use("/api/v1/restaurants", restaurantRouter); // restaurant router
 app.use("/api/v1/payments", paymentRouter); //payment router
+app.use("/api/v1/restaurantPayments", restaurantPaymentRouter); // restaurant payment router
 app.use("/api/v1/admin", adminRouter); // admin router
 
 app.use(errorHandler);

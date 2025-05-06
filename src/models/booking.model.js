@@ -1,7 +1,7 @@
 import mongoose, {Schema} from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
-const bookingSchema = new Schema({
+const booking = new Schema({
   // Reference to the User who made the booking
   user: {
     type: Schema.Types.ObjectId,
@@ -21,11 +21,11 @@ const bookingSchema = new Schema({
   },
 
   // Reference to the Room being booked will add this feature in future
-  //   room: {
-  //     type: Schema.Types.ObjectId,
-  //     ref: "Room",
-  //     required: true
-  //   },
+  room: {
+    type: Schema.Types.ObjectId,
+    ref: "Room",
+    required: true
+  },
 
   // Booking dates
   checkInDate: {
@@ -100,19 +100,19 @@ const bookingSchema = new Schema({
 }, {timestamps: true});
 
 // Add indexing for better performance
-bookingSchema.index({user: 1});
-bookingSchema.index({host: 1});
-bookingSchema.index({room: 1});
-bookingSchema.index({status: 1});
-bookingSchema.index({paymentStatus: 1});
+booking.index({user: 1});
+booking.index({host: 1});
+booking.index({room: 1});
+booking.index({status: 1});
+booking.index({paymentStatus: 1});
 
 // Virtual field for booking duration (in days)
-bookingSchema.virtual("duration").get(function () {
+booking.virtual("duration").get(function () {
   return Math.ceil((this.checkOutDate - this.checkInDate) / (1000 * 60 * 60 * 24));
 });
 
 // Auto-set payment date when payment is successful
-bookingSchema.pre("save", function (next) {
+booking.pre("save", function (next) {
   if (this.paymentStatus === "paid" && !this.paymentDate) {
     this.paymentDate = new Date();
   }
@@ -120,7 +120,7 @@ bookingSchema.pre("save", function (next) {
 });
 
 // Prevent overlapping bookings for the same room
-bookingSchema.pre("save", async function (next) {
+booking.pre("save", async function (next) {
   if (this.status === "cancelled") {
     return next(); // Skip validation for cancelled bookings
   }
@@ -145,9 +145,9 @@ bookingSchema.pre("save", async function (next) {
 });
 
 // Plugin for pagination
-bookingSchema.plugin(mongoosePaginate);
+booking.plugin(mongoosePaginate);
 
-const Booking = mongoose.model("Booking", bookingSchema);
+const Booking = mongoose.model("Booking", booking);
 
 export {
   Booking
