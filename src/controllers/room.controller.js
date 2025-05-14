@@ -254,31 +254,129 @@ const createRoom = asyncHandler(async (req, res) => {
 
 // Get all rooms
 const getAllRooms = asyncHandler(async (req, res) => {
-  logger.info("Fetching all rooms from the database.");
-
   try {
-    // Fetch all rooms from the database
-    const rooms = await Room.find({});
+    // Extract query parameters
+    const {
+      service,
+      roomType,
+      minPrice,
+      maxPrice,
+      minCapacity,
+      maxCapacity,
+      bedType,
+      bathroomType,
+      amenities,
+      tags,
+      isAvailable,
+      sortBy,
+      sortOrder = "asc",
+      page = 1,
+      limit = 10
+    } = req.query;
 
-    // If no rooms are found, return an empty array
-    if (!rooms || rooms.length === 0) {
-      logger.info("No rooms found in the database.");
-      return res.status(200).json(new ApiResponse(200, [], "No rooms found."));
+    // Build the filter object
+    const filter = {};
+
+    if (service) {
+      filter.service = service;
     }
 
-    // Log the number of rooms fetched
-    logger.info(`Fetched ${rooms.length} rooms from the database.`);
+    if (roomType) {
+      filter.roomType = {
+        $in: roomType.split(",")
+      };
+    }
 
-    // Return the list of rooms
-    res.status(200).json(new ApiResponse(200, rooms, "Rooms fetched successfully."));
+    // Price range filtering
+    if (minPrice || maxPrice) {
+      filter.pricePerNight = {};
+      if (minPrice) 
+        filter.pricePerNight.$gte = parseFloat(minPrice);
+      if (maxPrice) 
+        filter.pricePerNight.$lte = parseFloat(maxPrice);
+      }
+    
+    // Capacity filtering
+    if (minCapacity || maxCapacity) {
+      filter.$or = [
+        {
+          "capacity.adults": {}
+        }, {
+          "capacity.children": {}
+        }
+      ];
+
+      if (minCapacity) {
+        filter.$or[0]["capacity.adults"].$gte = parseInt(minCapacity);
+        filter.$or[1]["capacity.children"].$gte = parseInt(minCapacity);
+      }
+      if (maxCapacity) {
+        filter.$or[0]["capacity.adults"].$lte = parseInt(maxCapacity);
+        filter.$or[1]["capacity.children"].$lte = parseInt(maxCapacity);
+      }
+    }
+
+    if (bedType) {
+      filter.bedType = {
+        $in: bedType.split(",")
+      };
+    }
+
+    if (bathroomType) {
+      filter.bathroomType = {
+        $in: bathroomType.split(",")
+      };
+    }
+
+    if (amenities) {
+      filter.amenities = {
+        $all: amenities.split(",").map(a => a.trim().toLowerCase())
+      };
+    }
+
+    if (tags) {
+      filter.tags = {
+        $all: tags.split(",").map(t => t.trim().toLowerCase())
+      };
+    }
+
+    if (isAvailable !== undefined) {
+      filter.isAvailable = isAvailable === "true";
+    }
+
+    // Build the sort object
+    const sort = {};
+    if (sortBy) {
+      sort[sortBy] = sortOrder === "desc"
+        ? -1
+        : 1;
+    } else {
+      // Default sorting by price ascending
+      sort.pricePerNight = 1;
+    }
+
+    // Calculate pagination
+    const skip = (page - 1) * limit;
+
+    // Fetch rooms with pagination and populate service details
+    const rooms = await Room.find(filter).sort(sort).skip(skip).limit(limit).populate("service", "name type address");
+
+    // Count total rooms matching filters
+    const totalRooms = await Room.countDocuments(filter);
+
+    res.status(200).json(new ApiResponse(200, {
+      rooms,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total: totalRooms,
+      totalPages: Math.ceil(totalRooms / limit)
+    }, "Rooms fetched successfully."));
   } catch (error) {
-    // Log the error
     logger.error(`Error fetching rooms: ${error.message}`);
-
-    // Throw an ApiError if something goes wrong
-    throw new ApiError(500, "Failed to fetch rooms due to an internal server error.");
+    throw new ApiError(500, "Failed to fetch rooms.");
   }
 });
+
 
 // Get a room by ID
 const getRoomById = asyncHandler(async (req, res) => {
@@ -809,7 +907,6 @@ const updateRoomImages = asyncHandler(async (req, res) => {
 
 // Upload accommodation images for a room
 const uploadAccommodationImages = asyncHandler(async (req, res) => {
-  
   const {id} = req.params; // Room ID
   const userId = req.user._id; // Authenticated user's ID
   const files = req.files; // Uploaded images from multer
