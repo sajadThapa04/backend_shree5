@@ -8,7 +8,9 @@ import {
   getRoomsByService,
   getRoomsByType,
   uploadRoomImages,
-  updateRoomImages
+  updateRoomImages,
+  uploadAccommodationImages,
+  updateAccommodationImages
 } from "../controllers/room.controller.js";
 import {upload} from "../middlewares/multer.middlewares.js"; // Multer middleware for file uploads
 import {verifyJwt} from "../middlewares/auth.middlewares.js"; // Authentication middleware
@@ -42,4 +44,9 @@ router.post("/:id/images", verifyJwt, upload.array("images", 10), uploadRoomImag
 // Update images for a room (Requires JWT verification)
 router.patch("/:id/images", verifyJwt, upload.array("images", 10), updateRoomImages);
 
+// Upload accomodation_images for a room (Requires JWT verification)
+router.post("/:id/accomodation_images", verifyJwt, upload.array("images", 10), updateAccommodationImages);
+
+// update accomodation_images for a room (Requires JWT verification)
+router.patch("/:id/accomodation_images", verifyJwt, upload.array("images", 10), updateAccommodationImages);
 export default router;

@@ -15,10 +15,7 @@ const roomSchema = new Schema({
       true, "Room name is required"
     ],
     trim: true,
-    maxlength: [
-      100, "Room name cannot exceed 100 characters"
-    ],
-    unique: true
+    maxlength: [100, "Room name cannot exceed 100 characters"]
   },
 
   // Room type with expanded enum values
@@ -139,10 +136,6 @@ const roomSchema = new Schema({
     type: Number,
     min: [0, "Floor number cannot be negative"]
   },
-  hasPrivatePool: {
-    type: Boolean,
-    default: false
-  },
   bedType: {
     type: String,
     enum: [
@@ -185,23 +178,19 @@ const roomSchema = new Schema({
   // Images
   images: [
     {
-      url: {
-        type: String,
-        trim: true,
-        required: true
-      },
-      isFeatured: {
-        type: Boolean,
-        default: false
-      },
-      caption: {
-        type: String,
-        trim: true,
-        maxlength: 100
-      }
+      type: String,
+      trim: true,
+      match: [/^(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))$/i, "Image URL must be valid and end with png, jpg, jpeg, gif, or webp."]
     }
   ],
 
+  accommodationImages: [
+    {
+      type: String,
+      trim: true,
+      match: [/^(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))$/i, "Image URL must be valid and end with png, jpg, jpeg, gif, or webp."]
+    }
+  ],
   // Availability
   isAvailable: {
     type: Boolean,

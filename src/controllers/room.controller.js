@@ -23,7 +23,6 @@ const createRoom = asyncHandler(async (req, res) => {
       capacity,
       size,
       floorNumber,
-      hasPrivatePool,
       bedType,
       bathroomType,
       amenities,
@@ -217,7 +216,6 @@ const createRoom = asyncHandler(async (req, res) => {
       },
       size: size || undefined,
       floorNumber: floorNumber || undefined,
-      hasPrivatePool: hasPrivatePool || false,
       bedType: bedType || "queen",
       bathroomType: bathroomType || "private",
       amenities: amenities || [],
@@ -371,9 +369,9 @@ const getRoomsByType = asyncHandler(async (req, res) => {
 const updateRoom = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-  
+
   try {
-    const { id } = req.params; // Room ID
+    const {id} = req.params; // Room ID
     const userId = req.user._id; // Authenticated user's ID
     const updateData = req.body; // Data to update
 
@@ -400,7 +398,7 @@ const updateRoom = asyncHandler(async (req, res) => {
     }
 
     // Verify service ownership
-    const host = await Host.findOne({ user: userId }).session(session);
+    const host = await Host.findOne({user: userId}).session(session);
     if (!host || !service.host.equals(host._id)) {
       logger.error(`User ${userId} is not authorized to update room ${id}`);
       throw new ApiError(403, "You are not authorized to update this room.");
@@ -425,28 +423,51 @@ const updateRoom = asyncHandler(async (req, res) => {
 
     // Validate room type
     const validRoomTypes = [
-      "single", "double", "twin", "triple", "queen", "king",
-      "family", "suite", "presidential", "dormitory", "cottage",
-      "tent", "penthouse", "honeymoon", "studio", "shared",
-      "private", "entire_home", "other"
+      "single",
+      "double",
+      "twin",
+      "triple",
+      "queen",
+      "king",
+      "family",
+      "suite",
+      "presidential",
+      "dormitory",
+      "cottage",
+      "tent",
+      "penthouse",
+      "honeymoon",
+      "studio",
+      "shared",
+      "private",
+      "entire_home",
+      "other"
     ];
     if (updateData.roomType && !validRoomTypes.includes(updateData.roomType)) {
       logger.error(`Invalid room type: ${updateData.roomType}`);
-      throw new ApiError(400, `Invalid room type. Valid types are: ${validRoomTypes.join(', ')}`);
+      throw new ApiError(400, `Invalid room type. Valid types are: ${validRoomTypes.join(", ")}`);
     }
 
     // Validate bed type
-    const validBedTypes = ["king", "queen", "double", "single", "bunk", "floor_mattress", "other"];
+    const validBedTypes = [
+      "king",
+      "queen",
+      "double",
+      "single",
+      "bunk",
+      "floor_mattress",
+      "other"
+    ];
     if (updateData.bedType && !validBedTypes.includes(updateData.bedType)) {
       logger.error(`Invalid bed type: ${updateData.bedType}`);
-      throw new ApiError(400, `Invalid bed type. Valid types are: ${validBedTypes.join(', ')}`);
+      throw new ApiError(400, `Invalid bed type. Valid types are: ${validBedTypes.join(", ")}`);
     }
 
     // Validate bathroom type
     const validBathroomTypes = ["shared", "private", "ensuite"];
     if (updateData.bathroomType && !validBathroomTypes.includes(updateData.bathroomType)) {
       logger.error(`Invalid bathroom type: ${updateData.bathroomType}`);
-      throw new ApiError(400, `Invalid bathroom type. Valid types are: ${validBathroomTypes.join(', ')}`);
+      throw new ApiError(400, `Invalid bathroom type. Valid types are: ${validBathroomTypes.join(", ")}`);
     }
 
     // Validate room features
@@ -462,7 +483,7 @@ const updateRoom = asyncHandler(async (req, res) => {
 
     // Check for duplicate name
     if (updateData.name) {
-      const existingRoom = await Room.findOne({ name: updateData.name }).session(session);
+      const existingRoom = await Room.findOne({name: updateData.name}).session(session);
       if (existingRoom && existingRoom._id.toString() !== id) {
         logger.error(`Duplicate room name: ${updateData.name}`);
         throw new ApiError(400, "A room with this name already exists.");
@@ -471,8 +492,16 @@ const updateRoom = asyncHandler(async (req, res) => {
 
     // Validate openingHours if provided
     if (updateData.openingHours) {
-      const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-      
+      const days = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
+      ];
+
       if (!Array.isArray(updateData.openingHours) || updateData.openingHours.length === 0) {
         logger.error("Invalid opening hours array");
         throw new ApiError(400, "Opening hours are required for all days.");
@@ -505,15 +534,11 @@ const updateRoom = asyncHandler(async (req, res) => {
     }
 
     // Update the room
-    const updatedRoom = await Room.findByIdAndUpdate(
-      id,
-      updateData,
-      {
-        new: true,
-        runValidators: true,
-        session
-      }
-    );
+    const updatedRoom = await Room.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+      session
+    });
 
     if (!updatedRoom) {
       logger.error(`Failed to update room with ID: ${id}`);
@@ -525,7 +550,7 @@ const updateRoom = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, updatedRoom, "Room updated successfully."));
   } catch (error) {
     await session.abortTransaction();
-    logger.error(`Error in updateRoom: ${error.message}`, { stack: error.stack });
+    logger.error(`Error in updateRoom: ${error.message}`, {stack: error.stack});
 
     if (error instanceof ApiError) {
       throw error;
@@ -674,7 +699,10 @@ const uploadRoomImages = asyncHandler(async (req, res) => {
   }
 
   // Step 8: Update the room document with the new image URLs
-  room.images = room.images.concat(imageUrls); // Append new images to existing ones
+  room.images = [
+    ...(room.images || []),
+    ...imageUrls
+  ];
   const updatedRoom = await room.save();
 
   if (!updatedRoom) {
@@ -779,6 +807,181 @@ const updateRoomImages = asyncHandler(async (req, res) => {
   res.status(200).json(new ApiResponse(200, updatedRoom, "Room images updated successfully."));
 });
 
+// Upload accommodation images for a room
+const uploadAccommodationImages = asyncHandler(async (req, res) => {
+  
+  const {id} = req.params; // Room ID
+  const userId = req.user._id; // Authenticated user's ID
+  const files = req.files; // Uploaded images from multer
+
+  logger.info(`Starting uploadAccommodationImages process for room ID: ${id} by user ID: ${userId}`);
+
+  // Step 1: Validate the room ID
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    logger.error(`Invalid room ID: ${id}`);
+    throw new ApiError(400, "Invalid room ID.");
+  }
+
+  // Step 2: Fetch the room from the database
+  const room = await Room.findById(id);
+  if (!room) {
+    logger.error(`Room not found with ID: ${id}`);
+    throw new ApiError(404, "Room not found.");
+  }
+
+  // Step 3: Fetch the service associated with the room
+  const service = await Service.findById(room.service);
+  if (!service) {
+    logger.error(`Service not found for room ID: ${id}`);
+    throw new ApiError(404, "Service not found.");
+  }
+
+  // Step 4: Fetch the host associated with the service
+  const host = await Host.findById(service.host);
+  if (!host) {
+    logger.error(`Host not found for service ID: ${service._id}`);
+    throw new ApiError(404, "Host not found.");
+  }
+
+  // Step 5: Check if the authenticated user is authorized to upload images
+  if (host.user.toString() !== userId.toString()) {
+    logger.error(`User ${userId} is not authorized to upload images for room ${id}`);
+    throw new ApiError(403, "You are not authorized to upload images for this room.");
+  }
+
+  // Step 6: Check if images were uploaded
+  if (!files || files.length === 0) {
+    logger.error("No images were uploaded.");
+    throw new ApiError(400, "No images were uploaded.");
+  }
+
+  // Step 7: Upload images to Cloudinary
+  const imageUrls = [];
+  for (const file of files) {
+    try {
+      const cloudinaryResponse = await uploadOnCloudinary(file.path);
+      if (cloudinaryResponse && cloudinaryResponse.secure_url) {
+        imageUrls.push(cloudinaryResponse.secure_url);
+        logger.info(`Accommodation image uploaded to Cloudinary: ${cloudinaryResponse.secure_url}`);
+      } else {
+        logger.error("Failed to upload accommodation image to Cloudinary.");
+        throw new ApiError(500, "Failed to upload accommodation images to Cloudinary.");
+      }
+    } catch (error) {
+      logger.error(`Error uploading accommodation image to Cloudinary: ${error.message}`);
+      throw new ApiError(500, "Failed to upload accommodation images to Cloudinary.");
+    }
+  }
+
+  // Step 8: Update the room document with the new image URLs
+  room.accommodationImages = [
+    ...(room.accommodationImages || []),
+    ...imageUrls
+  ];
+  const updatedRoom = await room.save();
+
+  if (!updatedRoom) {
+    logger.error(`Failed to update room with ID: ${id}`);
+    throw new ApiError(500, "Failed to update the room with new accommodation images.");
+  }
+
+  // Step 9: Return the updated room
+  logger.info(`Accommodation images uploaded successfully for room ID: ${id}`);
+  res.status(200).json(new ApiResponse(200, updatedRoom, "Accommodation images uploaded successfully."));
+});
+
+// Update accommodation images for a room
+const updateAccommodationImages = asyncHandler(async (req, res) => {
+  const {id} = req.params; // Room ID
+  const userId = req.user._id; // Authenticated user's ID
+  const files = req.files; // Uploaded images from multer
+
+  logger.info(`Starting updateAccommodationImages process for room ID: ${id} by user ID: ${userId}`);
+
+  // Step 1: Validate the room ID
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    logger.error(`Invalid room ID: ${id}`);
+    throw new ApiError(400, "Invalid room ID.");
+  }
+
+  // Step 2: Fetch the room from the database
+  const room = await Room.findById(id);
+  if (!room) {
+    logger.error(`Room not found with ID: ${id}`);
+    throw new ApiError(404, "Room not found.");
+  }
+
+  // Step 3: Fetch the service associated with the room
+  const service = await Service.findById(room.service);
+  if (!service) {
+    logger.error(`Service not found for room ID: ${id}`);
+    throw new ApiError(404, "Service not found.");
+  }
+
+  // Step 4: Fetch the host associated with the service
+  const host = await Host.findById(service.host);
+  if (!host) {
+    logger.error(`Host not found for service ID: ${service._id}`);
+    throw new ApiError(404, "Host not found.");
+  }
+
+  // Step 5: Check if the authenticated user is authorized to update images
+  if (host.user.toString() !== userId.toString()) {
+    logger.error(`User ${userId} is not authorized to update images for room ${id}`);
+    throw new ApiError(403, "You are not authorized to update images for this room.");
+  }
+
+  // Step 6: Check if images were uploaded
+  if (!files || files.length === 0) {
+    logger.error("No images were uploaded.");
+    throw new ApiError(400, "No images were uploaded.");
+  }
+
+  // Step 7: Delete old images from Cloudinary
+  if (room.accommodationImages && room.accommodationImages.length > 0) {
+    for (const imageUrl of room.accommodationImages) {
+      try {
+        await deleteFromCloudinary(imageUrl);
+        logger.info(`Deleted old accommodation image from Cloudinary: ${imageUrl}`);
+      } catch (error) {
+        logger.error(`Failed to delete old accommodation image from Cloudinary: ${imageUrl}`, error);
+        throw new ApiError(500, "Failed to delete old accommodation images from Cloudinary.");
+      }
+    }
+  }
+
+  // Step 8: Upload new images to Cloudinary
+  const newImageUrls = [];
+  for (const file of files) {
+    try {
+      const cloudinaryResponse = await uploadOnCloudinary(file.path);
+      if (cloudinaryResponse && cloudinaryResponse.secure_url) {
+        newImageUrls.push(cloudinaryResponse.secure_url);
+        logger.info(`New accommodation image uploaded to Cloudinary: ${cloudinaryResponse.secure_url}`);
+      } else {
+        logger.error("Failed to upload new accommodation image to Cloudinary.");
+        throw new ApiError(500, "Failed to upload new accommodation images to Cloudinary.");
+      }
+    } catch (error) {
+      logger.error(`Error uploading new accommodation image to Cloudinary: ${error.message}`);
+      throw new ApiError(500, "Failed to upload new accommodation images to Cloudinary.");
+    }
+  }
+
+  // Step 9: Update the room document with the new image URLs
+  room.accommodationImages = newImageUrls; // Replace old images with new ones
+  const updatedRoom = await room.save();
+
+  if (!updatedRoom) {
+    logger.error(`Failed to update room with ID: ${id}`);
+    throw new ApiError(500, "Failed to update the room with new accommodation images.");
+  }
+
+  // Step 10: Return the updated room
+  logger.info(`Accommodation images updated successfully for room ID: ${id}`);
+  res.status(200).json(new ApiResponse(200, updatedRoom, "Accommodation images updated successfully."));
+});
+
 export {
   createRoom,
   getAllRooms,
@@ -788,5 +991,7 @@ export {
   updateRoom,
   deleteRoom,
   uploadRoomImages,
-  updateRoomImages
+  updateRoomImages,
+  uploadAccommodationImages,
+  updateAccommodationImages
 };

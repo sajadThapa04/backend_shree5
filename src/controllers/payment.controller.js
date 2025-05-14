@@ -280,7 +280,13 @@ const createPayment = asyncHandler(async (req, res) => {
         paymentStatus: paymentIntent.status // Set payment status based on Stripe response
       });
 
+      // Update the booking status
+      await Booking.findByIdAndUpdate(booking, {
+        paymentMethod: "stripe",
+        paymentStatus: "pending" // or whatever initial status you want
+      }, {new: true});
       logger.info(`Stripe payment created successfully for booking: ${booking} by user: ${user}`);
+
       return res.status(201).json(new ApiResponse(201, newPayment, "Payment created successfully"));
     } catch (error) {
       logger.error(`Stripe Error: ${error.message}`);
@@ -314,6 +320,10 @@ const confirmPayment = asyncHandler(async (req, res) => {
       paymentStatus: confirmedPaymentIntent.status
     }, {new: true});
 
+    // Update restaurant booking payment status if succeeded
+    if (confirmedPaymentIntent.status === "succeeded") {
+      await Booking.findByIdAndUpdate(updatedPayment.booking, {paymentStatus: "paid"});
+    }
     if (!updatedPayment) {
       logger.error(`Payment not found for transaction ID: ${paymentIntentId}`);
       throw new ApiError(404, "Payment not found");
