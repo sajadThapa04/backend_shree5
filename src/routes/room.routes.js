@@ -33,7 +33,7 @@ router.get("/", getAllRooms);
 router.get("/:id", getRoomById);
 
 // Fetch rooms by service ID
-router.get("/service/:serviceId", getRoomsByService);
+router.get("/service/:serviceId",verifyJwt, getRoomsByService);
 
 // Fetch rooms by room type
 router.get("/type/:roomType", getRoomsByType);

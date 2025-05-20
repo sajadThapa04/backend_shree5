@@ -2,11 +2,20 @@ import mongoose, {Schema} from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
 const booking = new Schema({
-  // Reference to the User who made the booking
+  // Reference to the User who made the booking (optional for guest bookings)
   user: {
     type: Schema.Types.ObjectId,
     ref: "User",
-    required: true
+    required: function () {
+      return !this.guestInfo; // Only required if no guest info provided
+    },
+    validate: {
+      validator: function (v) {
+        // If guestInfo exists, user should be null, and vice versa
+        return !(this.guestInfo && v);
+      },
+      message: "Booking cannot have both user and guest information"
+    }
   },
   // Reference to the Host being booked
   host: {
@@ -21,6 +30,59 @@ const booking = new Schema({
   },
 
   // Reference to the Room being booked will add this feature in future
+  room: {
+    type: Schema.Types.ObjectId,
+    ref: "Room",
+    required: true
+  },
+
+  // Information for guest bookings (optional for registered users)
+  guestInfo: {
+    fullName: {
+      type: String,
+      required: function () {
+        return !this.user; // Only required if no user provided
+      },
+      trim: true,
+      maxlength: [100, "Name cannot exceed 100 characters"]
+    },
+    email: {
+      type: String,
+      required: function () {
+        return !this.user; // Only required if no user provided
+      },
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: function (v) {
+          return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+        },
+        message: "Please enter a valid email address"
+      }
+    },
+    phone: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: function (v) {
+          return !v || /^\+?[\d\s-]{10,}$/.test(v);
+        },
+        message: "Please enter a valid phone number"
+      }
+    }
+  },
+
+  // Reference to the Host being booked
+  host: {
+    type: Schema.Types.ObjectId,
+    ref: "Host",
+    required: true
+  },
+  service: {
+    type: mongoose.Types.ObjectId,
+    ref: "Service",
+    required: true
+  },
   room: {
     type: Schema.Types.ObjectId,
     ref: "Room",
@@ -48,18 +110,21 @@ const booking = new Schema({
       message: "Check-out date must be after check-in date."
     }
   },
+
   // Number of guests
   numberOfGuests: {
     type: Number,
     default: 1,
     min: [1, "Number of guests must be at least 1."]
   },
+
   // Total price for the booking
   totalPrice: {
     type: Number,
     required: true,
     min: [0, "Total price cannot be negative."]
   },
+
   // Payment details
   paymentStatus: {
     type: String,
@@ -83,6 +148,7 @@ const booking = new Schema({
     type: String,
     trim: true
   },
+
   // Booking status
   status: {
     type: String,
@@ -91,16 +157,27 @@ const booking = new Schema({
     ],
     default: "pending"
   },
+
   // Additional notes or special requests from the user
   specialRequests: {
     type: String,
     trim: true,
     maxlength: [500, "Special requests cannot exceed 500 characters."]
+  },
+
+  // Track booking source (web, mobile, guest, etc.)
+  bookingSource: {
+    type: String,
+    enum: [
+      "web", "mobile", "agent", "walk-in"
+    ],
+    default: "web"
   }
 }, {timestamps: true});
 
 // Add indexing for better performance
 booking.index({user: 1});
+booking.index({"guestInfo.email": 1});
 booking.index({host: 1});
 booking.index({room: 1});
 booking.index({status: 1});
@@ -109,6 +186,13 @@ booking.index({paymentStatus: 1});
 // Virtual field for booking duration (in days)
 booking.virtual("duration").get(function () {
   return Math.ceil((this.checkOutDate - this.checkInDate) / (1000 * 60 * 60 * 24));
+});
+
+// Virtual field to get booking user's name (either registered user or guest)
+booking.virtual("customerName").get(function () {
+  return this.user
+    ?.fullName || this.guestInfo
+      ?.fullName;
 });
 
 // Auto-set payment date when payment is successful
@@ -135,11 +219,22 @@ booking.pre("save", async function (next) {
     },
     status: {
       $ne: "cancelled"
-    }
+    },
+    _id: {
+      $ne: this._id
+    } // Exclude current booking when updating
   });
 
   if (existingBooking) {
     return next(new Error("This room is already booked for the selected dates."));
+  }
+  next();
+});
+
+// Validate that either user or guestInfo is provided
+booking.pre("validate", function (next) {
+  if (!this.user && !this.guestInfo) {
+    return next(new Error("Booking must be associated with either a registered user or include guest information."));
   }
   next();
 });

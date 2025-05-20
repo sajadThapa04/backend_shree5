@@ -1,29 +1,41 @@
 import {asyncHandler} from "../utils/asyncHandler.js";
 import {ApiError} from "../utils/ApiError.js";
 import {ApiResponse} from "../utils/ApiResponse.js";
-import {Booking} from "../models/booking.model.js"; // Import the Booking model
-import {Host} from "../models/host.model.js"; // Import the Host model
-import logger from "../utils/logger.js"; // Import the logger
+import {Booking} from "../models/booking.model.js";
+import {Host} from "../models/host.model.js";
+import logger from "../utils/logger.js";
 import {Service} from "../models/services.model.js";
 import {Room} from "../models/room.model.js";
 import {User} from "../models/user.model.js";
+import mongoose from "mongoose";
 
 /**
- * Create a new booking
+ * Create a new booking (for both authenticated users and guests)
  */
 const createBooking = asyncHandler(async (req, res) => {
   const {
-    host, service, room, // Added room field
+    host,
+    service,
+    room,
     checkInDate,
     checkOutDate,
     numberOfGuests,
     totalPrice,
     paymentMethod,
-    specialRequests
+    specialRequests,
+    guestInfo // Added for guest bookings
   } = req.body;
-  const user = req.user._id; // Authenticated user's ID
 
-  logger.info(`Starting createBooking process for host: ${host}, service: ${service}, room: ${room} by user: ${user}`);
+  // Determine if this is a guest booking
+  const isGuestBooking = !req.user && guestInfo;
+  const userId = req.user
+    ?._id;
+
+  logger.info(
+    `Starting createBooking process for ${isGuestBooking
+    ? "guest"
+    : "user"}: ${userId || guestInfo
+      ?.email}`);
 
   // Step 1: Validate input fields
   if (!host || !service || !room || !checkInDate || !checkOutDate || !numberOfGuests || !totalPrice || !paymentMethod) {
@@ -31,77 +43,86 @@ const createBooking = asyncHandler(async (req, res) => {
     throw new ApiError(400, "All required fields must be provided");
   }
 
-  // Step 2: Validate check-in and check-out dates
-  const currentDate = Date.now();
+  // Additional validation for guest bookings
+  if (isGuestBooking) {
+    if (!guestInfo.fullName || !guestInfo.email) {
+      logger.error("Missing guest information");
+      throw new ApiError(400, "Guest bookings require full name and email");
+    }
+  }
+
+  // Step 2: Validate dates
+  const currentDate = new Date();
   const parsedCheckInDate = new Date(checkInDate);
   const parsedCheckOutDate = new Date(checkOutDate);
 
-  if (isNaN(parsedCheckInDate.getTime()) || parsedCheckInDate < currentDate) {
-    logger.error("Invalid or past check-in date");
+  if (isNaN(parsedCheckInDate.getTime())) {
+    logger.error("Invalid check-in date format");
+    throw new ApiError(400, "Invalid check-in date format");
+  }
+
+  if (isNaN(parsedCheckOutDate.getTime())) {
+    logger.error("Invalid check-out date format");
+    throw new ApiError(400, "Invalid check-out date format");
+  }
+
+  if (parsedCheckInDate < currentDate) {
+    logger.error("Check-in date in the past");
     throw new ApiError(400, "Check-in date must be in the future");
   }
 
-  if (isNaN(parsedCheckOutDate.getTime()) || parsedCheckOutDate <= parsedCheckInDate) {
-    logger.error("Invalid check-out date");
+  if (parsedCheckOutDate <= parsedCheckInDate) {
+    logger.error("Check-out before check-in");
     throw new ApiError(400, "Check-out date must be after check-in date");
   }
 
-  // Step 3: Validate number of guests
+  // Step 3: Validate guests and price
   if (!Number.isInteger(numberOfGuests) || numberOfGuests < 1) {
     logger.error("Invalid number of guests");
     throw new ApiError(400, "Number of guests must be a positive integer");
   }
 
-  // Step 4: Validate total price
   if (isNaN(totalPrice) || totalPrice <= 0) {
     logger.error("Invalid total price");
     throw new ApiError(400, "Total price must be a positive number");
   }
 
-  // Step 5: Validate payment method
-  const validPaymentMethods = ["credit_card", "paypal", "stripe", "razorpay", "esewa"];
-  if (!validPaymentMethods.includes(paymentMethod)) {
-    logger.error("Invalid payment method");
-    throw new ApiError(400, "Invalid payment method");
-  }
+  // Step 4: Validate entities exist and relationships
+  const [hostExists, serviceExists, roomExists] = await Promise.all([
+    Host.findById(host),
+    Service.findOne({_id: service, host}),
+    Room.findOne({_id: room, service}).populate("service")
+  ]);
 
-  // Step 6: Check if the host exists
-  const hostExists = await Host.findById(host);
   if (!hostExists) {
-    logger.error(`Host not found with ID: ${host}`);
+    logger.error(`Host not found: ${host}`);
     throw new ApiError(404, "Host not found");
   }
 
-  // Step 7: Check if the service exists and belongs to the host
-  const serviceExists = await Service.findOne({_id: service, host});
   if (!serviceExists) {
-    logger.error(`Service not found with ID: ${service} or does not belong to host: ${host}`);
-    throw new ApiError(404, "Service not found or does not belong to the host");
+    logger.error(`Service not found or host mismatch: ${service}`);
+    throw new ApiError(404, "Service not found or doesn't belong to host");
   }
 
-  // Step 8: Check if the room exists and belongs to the service
-  const roomExists = await Room.findOne({_id: room, service: service}).populate("service"); // Populate the service to check host relationship
-
   if (!roomExists) {
-    logger.error(`Room not found with ID: ${room}`);
+    logger.error(`Room not found: ${room}`);
     throw new ApiError(404, "Room not found");
   }
 
-  // Additional check to ensure room's service belongs to the host
   if (roomExists.service.host.toString() !== host.toString()) {
-    logger.error(`Room ${room} belongs to a service that doesn't match the host`);
+    logger.error(`Room service host mismatch`);
     throw new ApiError(400, "Room doesn't belong to the specified host");
   }
 
-  // Step 9: Validate room capacity
+  // Step 5: Validate capacity
   const totalCapacity = roomExists.capacity.adults + roomExists.capacity.children;
   if (numberOfGuests > totalCapacity) {
-    logger.error(`Number of guests (${numberOfGuests}) exceeds room capacity (${totalCapacity})`);
+    logger.error(`Guest count exceeds capacity: ${numberOfGuests} > ${totalCapacity}`);
     throw new ApiError(400, "Number of guests exceeds room capacity");
   }
 
-  // Step 10: Check if the room is available for the selected dates
-  const overlappingBookingCount = await Booking.countDocuments({
+  // Step 6: Check availability
+  const overlappingBooking = await Booking.findOne({
     room,
     checkInDate: {
       $lt: parsedCheckOutDate
@@ -111,17 +132,20 @@ const createBooking = asyncHandler(async (req, res) => {
     },
     status: {
       $ne: "cancelled"
-    } // Ignore cancelled bookings
+    }
   });
 
-  if (overlappingBookingCount > 0) {
-    logger.error(`Room ${room} is already booked for the selected dates`);
+  if (overlappingBooking) {
+    logger.error(`Room already booked for dates`);
     throw new ApiError(400, "Room is already booked for the selected dates");
   }
 
-  // Step 11: Create a new booking
-  const newBooking = await Booking.create({
-    user, host, service, room, // Include room in the booking
+  
+  // Step 7: Create booking
+  const bookingData = {
+    host,
+    service,
+    room,
     checkInDate: parsedCheckInDate,
     checkOutDate: parsedCheckOutDate,
     numberOfGuests,
@@ -129,243 +153,292 @@ const createBooking = asyncHandler(async (req, res) => {
     paymentMethod,
     specialRequests: specialRequests
       ?.trim() || "",
-    paymentStatus: "pending", // Default payment status
-    status: "pending" // Default booking status
-  });
+    paymentStatus: "pending",
+    status: "pending",
+    bookingSource: req.headers["x-booking-source"] || "web"
+  };
 
-  // Step 12: Update room's bookedDates (only if the field exists)
-  if (roomExists.bookedDates && Array.isArray(roomExists.bookedDates)) {
-    roomExists.bookedDates.push({checkInDate: parsedCheckInDate, checkOutDate: parsedCheckOutDate, booking: newBooking._id});
-    await roomExists.save();
+  if (isGuestBooking) {
+    bookingData.guestInfo = {
+      fullName: guestInfo.fullName.trim(),
+      email: guestInfo.email.trim().toLowerCase(),
+      phone: guestInfo.phone
+        ?.trim() || undefined
+    };
   } else {
-    logger.warn(`Room ${room} does not have bookedDates array, skipping update`);
+    bookingData.user = userId;
   }
 
-  logger.info(`Booking created successfully for host: ${host}, service: ${service}, room: ${room} by user: ${user}`);
-  // Step 13: Return the created booking
-  res.status(201).json(new ApiResponse(201, newBooking, "Booking created successfully"));
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const newBooking = await Booking.create([bookingData], {session});
+
+    // Update room's bookedDates
+    if (roomExists.bookedDates) {
+      roomExists.bookedDates.push({checkInDate: parsedCheckInDate, checkOutDate: parsedCheckOutDate, booking: newBooking[0]._id});
+      await roomExists.save({session});
+    }
+
+    await session.commitTransaction();
+    logger.info(`Booking created successfully: ${newBooking[0]._id}`);
+
+    res.status(201).json(new ApiResponse(201, newBooking[0], "Booking created successfully"));
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Booking creation failed: ${error.message}`);
+    throw new ApiError(500, "Failed to create booking");
+  } finally {
+    session.endSession();
+  }
 });
 
 /**
  * Update a booking
  */
 const updateBooking = asyncHandler(async (req, res) => {
-  const {id} = req.params; // Booking ID
+  const {id} = req.params;
   const {checkInDate, checkOutDate, numberOfGuests, specialRequests} = req.body;
-  const user = req.user._id; // Authenticated user's ID
+  const userId = req.user
+    ?._id;
 
-  logger.info(`Starting updateBooking process for booking ID: ${id} by user: ${user}`);
+  logger.info(`Starting updateBooking for booking ID: ${id}`);
 
-  // Step 1: Validate input fields
+  // Validate input
   if (!checkInDate || !checkOutDate || !numberOfGuests) {
     logger.error("Missing required fields");
     throw new ApiError(400, "All required fields must be provided");
   }
 
-  // Validate check-in and check-out dates
-  const currentDate = Date.now();
   const parsedCheckInDate = new Date(checkInDate);
   const parsedCheckOutDate = new Date(checkOutDate);
 
-  if (isNaN(parsedCheckInDate.getTime()) || parsedCheckInDate < currentDate) {
-    logger.error("Invalid or past check-in date");
-    throw new ApiError(400, "Check-in date must be in the future");
+  if (isNaN(parsedCheckInDate.getTime()) || isNaN(parsedCheckOutDate.getTime())) {
+    logger.error("Invalid date format");
+    throw new ApiError(400, "Invalid date format");
   }
 
-  if (isNaN(parsedCheckOutDate.getTime()) || parsedCheckOutDate <= parsedCheckInDate) {
-    logger.error("Invalid check-out date");
+  if (parsedCheckOutDate <= parsedCheckInDate) {
+    logger.error("Check-out before check-in");
     throw new ApiError(400, "Check-out date must be after check-in date");
   }
 
-  // Validate number of guests
-  if (!Number.isInteger(numberOfGuests) || numberOfGuests < 1) {
-    logger.error("Invalid number of guests");
-    throw new ApiError(400, "Number of guests must be a positive integer");
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Find booking with room populated
+    const booking = await Booking.findById(id).populate("room").session(session);
+
+    if (!booking) {
+      logger.error(`Booking not found: ${id}`);
+      throw new ApiError(404, "Booking not found");
+    }
+
+    // Authorization check
+    if ((
+      booking.user && booking.user.toString() !== userId
+      ?.toString()) || (!booking.user && !req.user)) {
+      logger.error(`Unauthorized update attempt`);
+      throw new ApiError(403, "Not authorized to update this booking");
+    }
+
+    // Check room availability for new dates
+    const overlappingBooking = await Booking.findOne({
+      room: booking.room._id,
+      checkInDate: {
+        $lt: parsedCheckOutDate
+      },
+      checkOutDate: {
+        $gt: parsedCheckInDate
+      },
+      status: {
+        $ne: "cancelled"
+      },
+      _id: {
+        $ne: id
+      }
+    }).session(session);
+
+    if (overlappingBooking) {
+      logger.error(`Room already booked for new dates`);
+      throw new ApiError(400, "Room is already booked for the selected dates");
+    }
+
+    // Update room's bookedDates
+    const room = booking.room;
+    if (room.bookedDates) {
+      // Remove old dates
+      room.bookedDates = room.bookedDates.filter(dateRange => dateRange.booking.toString() !== id.toString());
+
+      // Add new dates
+      room.bookedDates.push({checkInDate: parsedCheckInDate, checkOutDate: parsedCheckOutDate, booking: id});
+
+      await room.save({session});
+    }
+
+    // Update booking
+    booking.checkInDate = parsedCheckInDate;
+    booking.checkOutDate = parsedCheckOutDate;
+    booking.numberOfGuests = numberOfGuests;
+    booking.specialRequests = specialRequests
+      ?.trim() || "";
+
+    const updatedBooking = await booking.save({session});
+    await session.commitTransaction();
+
+    logger.info(`Booking updated successfully: ${id}`);
+    res.status(200).json(new ApiResponse(200, updatedBooking, "Booking updated successfully"));
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Booking update failed: ${error.message}`);
+    throw error;
+  } finally {
+    session.endSession();
   }
-
-  // Step 2: Find the booking to update
-  const booking = await Booking.findById(id).populate("room");
-  if (!booking) {
-    logger.error(`Booking not found with ID: ${id}`);
-    throw new ApiError(404, "Booking not found");
-  }
-
-  // Step 3: Check if the authenticated user is the owner of the booking
-  if (booking.user.toString() !== user.toString()) {
-    logger.error(`User ${user} is not authorized to update booking ${id}`);
-    throw new ApiError(403, "You are not authorized to update this booking");
-  }
-
-  // Step 4: Check if the new dates are available for the room
-  const overlappingBookingCount = await Booking.countDocuments({
-    room: booking.room._id,
-    checkInDate: {
-      $lt: parsedCheckOutDate
-    },
-    checkOutDate: {
-      $gt: parsedCheckInDate
-    },
-    status: {
-      $ne: "cancelled"
-    }, // Ignore cancelled bookings
-    _id: {
-      $ne: id
-    } // Exclude the current booking from the check
-  });
-
-  if (overlappingBookingCount > 0) {
-    logger.error(`Room ${booking.room._id} is already booked for the selected dates`);
-    throw new ApiError(400, "Room is already booked for the selected dates");
-  }
-
-  // Step 5: Validate room capacity
-  if (numberOfGuests > booking.room.capacity) {
-    logger.error(`Number of guests (${numberOfGuests}) exceeds room capacity (${booking.room.capacity})`);
-    throw new ApiError(400, "Number of guests exceeds room capacity");
-  }
-
-  // Step 6: Update the room's bookedDates (remove old dates, add new ones)
-  const room = await Room.findById(booking.room._id);
-  if (room) {
-    // Remove the old booking dates
-    room.bookedDates = room.bookedDates.filter(dateRange => dateRange.booking.toString() !== id.toString());
-
-    // Add the new booking dates
-    room.bookedDates.push({checkInDate: parsedCheckInDate, checkOutDate: parsedCheckOutDate, booking: id});
-
-    await room.save();
-  }
-
-  // Step 7: Update the booking
-  booking.checkInDate = parsedCheckInDate;
-  booking.checkOutDate = parsedCheckOutDate;
-  booking.numberOfGuests = numberOfGuests;
-  booking.specialRequests = specialRequests
-    ?.trim() || "";
-
-  const updatedBooking = await booking.save();
-  if (!updatedBooking) {
-    logger.error(`Failed to update booking with ID: ${id}`);
-    throw new ApiError(500, "Failed to update the booking");
-  }
-
-  // Step 8: Return the updated booking
-  logger.info(`Booking updated successfully for booking ID: ${id}`);
-  res.status(200).json(new ApiResponse(200, updatedBooking, "Booking updated successfully"));
 });
+
 /**
  * Cancel a booking
  */
-
 const cancelBooking = asyncHandler(async (req, res) => {
-  const {id} = req.params; // Booking ID
-  const user = req.user._id; // Authenticated user's ID
+  const {id} = req.params;
+  const userId = req.user
+    ?._id;
 
-  logger.info(`Starting cancelBooking process for booking ID: ${id} by user: ${user}`);
+  logger.info(`Starting cancelBooking for booking ID: ${id}`);
 
-  // Step 1: Find the booking to cancel
-  const booking = await Booking.findById(id);
-  if (!booking) {
-    logger.error(`Booking not found with ID: ${id}`);
-    throw new ApiError(404, "Booking not found");
-  }
-
-  // Step 2: Check if the authenticated user is the owner of the booking
-  if (booking.user.toString() !== user.toString()) {
-    logger.error(`User ${user} is not authorized to cancel booking ${id}`);
-    throw new ApiError(403, "You are not authorized to cancel this booking");
-  }
-
-  // Step 3: Cancel the booking
-  booking.status = "cancelled"; // Update the booking status to "cancelled"
-  const cancelledBooking = await booking.save();
-
-  if (!cancelledBooking) {
-    logger.error(`Failed to cancel booking with ID: ${id}`);
-    throw new ApiError(500, "Failed to cancel the booking");
-  }
-
-  // Step 4: Return success response
-  logger.info(`Booking cancelled successfully for booking ID: ${id}`);
-  res.status(200).json(new ApiResponse(200, cancelledBooking, "Booking cancelled successfully"));
-});
-
-/**
- * Fetch all bookings for a specific user
- */
-const getUserBookings = asyncHandler(async (req, res) => {
-  const user = req.user._id; // Authenticated user's ID
-
-  logger.info(`Starting getUserBookings process for user: ${user}`);
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
   try {
-    // Step 1: Fetch all bookings for the user with populated details
-    const bookings = await Booking.find({user}).populate("host", "name email phone"). // Basic host info
-    populate("service", "name type"). // Basic service info
-    populate("room", "name roomType pricePerNight"). // Basic room info
-    sort({checkInDate: -1}); // Sort by newest first
+    const booking = await Booking.findById(id).populate("room").session(session);
 
-    // Step 2: Validate if bookings exist
-    if (!bookings || bookings.length === 0) {
-      logger.info(`No bookings found for user: ${user}`);
-      return res.status(200).json(new ApiResponse(200, [], "No bookings found for this user"));
+    if (!booking) {
+      logger.error(`Booking not found: ${id}`);
+      throw new ApiError(404, "Booking not found");
     }
 
-    logger.info(`Successfully retrieved ${bookings.length} bookings for user: ${user}`);
+    // Authorization check
+    if ((
+      booking.user && booking.user.toString() !== userId
+      ?.toString()) || (!booking.user && !req.user)) {
+      logger.error(`Unauthorized cancel attempt`);
+      throw new ApiError(403, "Not authorized to cancel this booking");
+    }
 
-    // Step 3: Return the bookings
-    res.status(200).json(new ApiResponse(200, bookings, "User bookings retrieved successfully"));
+    // Update booking status
+    booking.status = "cancelled";
+    const cancelledBooking = await booking.save({session});
+
+    // Remove from room's bookedDates if exists
+    if (
+      booking.room
+      ?.bookedDates) {
+      booking.room.bookedDates = booking.room.bookedDates.filter(dateRange => dateRange.booking.toString() !== id.toString());
+      await booking.room.save({session});
+    }
+
+    await session.commitTransaction();
+    logger.info(`Booking cancelled successfully: ${id}`);
+
+    res.status(200).json(new ApiResponse(200, cancelledBooking, "Booking cancelled successfully"));
   } catch (error) {
-    logger.error(`Error fetching bookings for user ${user}: ${error.message}`);
-    throw new ApiError(500, "Failed to retrieve user bookings");
+    await session.abortTransaction();
+    logger.error(`Booking cancellation failed: ${error.message}`);
+    throw error;
+  } finally {
+    session.endSession();
   }
 });
 
 /**
- * Fetch all bookings for a specific service
+ * Get bookings for a user (authenticated or guest via email)
+ */
+const getUserBookings = asyncHandler(async (req, res) => {
+  const userId = req.user
+    ?._id;
+  const {email} = req.query; // For guest bookings lookup
+
+  logger.info(
+    `Starting getUserBookings for ${userId
+    ? "user"
+    : "guest"}: ${userId || email}`);
+
+  try {
+    let bookings;
+
+    if (userId) {
+      // Authenticated user
+      bookings = await Booking.find({user: userId}).populate("host", "name email phone").populate("service", "name type").populate("room", "name roomType pricePerNight").sort({checkInDate: -1});
+    } else if (email) {
+      // Guest user
+      bookings = await Booking.find({"guestInfo.email": email.toLowerCase()}).populate("host", "name email phone").populate("service", "name type").populate("room", "name roomType pricePerNight").sort({checkInDate: -1});
+    } else {
+      throw new ApiError(400, "User ID or guest email required");
+    }
+
+    if (!bookings.length) {
+      logger.info("No bookings found");
+      return res.status(200).json(new ApiResponse(200, [], "No bookings found"));
+    }
+
+    logger.info(`Found ${bookings.length} bookings`);
+    res.status(200).json(new ApiResponse(200, bookings, "Bookings retrieved successfully"));
+  } catch (error) {
+    logger.error(`Failed to get bookings: ${error.message}`);
+    throw new ApiError(500, "Failed to retrieve bookings");
+  }
+});
+
+/**
+ * Get bookings for a service (host only)
  */
 const getServiceBooking = asyncHandler(async (req, res) => {
   const {serviceId} = req.params;
   const userId = req.user
-    ?._id; // Authenticated user's ID
-  logger.info(`Starting getServiceBooking process for service ID: ${serviceId} by user: ${userId}`);
+    ?._id;
+
+  logger.info(`Starting getServiceBooking for service: ${serviceId}`);
 
   try {
-    // Step 1: Find the user's host profile
+    // Verify user is a host
     const user = await User.findById(userId).populate("hostProfile");
-    if (!user || !user.hostProfile) {
-      logger.error(`User ${userId} doesn't have a host profile`);
-      throw new ApiError(403, "You don't have a host profile");
+    if (
+      !user
+      ?.hostProfile) {
+      logger.error("User is not a host");
+      throw new ApiError(403, "Only hosts can access service bookings");
     }
 
-    const hostId = user.hostProfile._id;
-
-    // Step 2: Validate service exists and belongs to host
-    const service = await Service.findOne({_id: serviceId, host: hostId});
+    // Verify service belongs to host
+    const service = await Service.findOne({_id: serviceId, host: user.hostProfile._id});
 
     if (!service) {
-      logger.error(`Service ${serviceId} not found or doesn't belong to host ${hostId}`);
+      logger.error("Service not found or unauthorized");
       throw new ApiError(404, "Service not found or unauthorized");
     }
 
-    // Step 3: Fetch all bookings for the service
-    const bookings = await Booking.find({service: serviceId}).populate("user", "name email"). // Basic user info
-    populate("room", "name roomType"). // Basic room info
-    sort({checkInDate: -1}); // Sort by newest first
+    // Get bookings
+    const bookings = await Booking.find({service: serviceId}).populate({
+      path: "user",
+      select: "name email",
+      options: {
+        retainNullValues: true
+      }
+    }).populate("room", "name roomType").sort({checkInDate: -1});
 
-    // Step 4: Validate if bookings exist
-    if (!bookings || bookings.length === 0) {
-      logger.info(`No bookings found for service: ${serviceId}`);
+    if (!bookings.length) {
+      logger.info("No bookings found for service");
       return res.status(200).json(new ApiResponse(200, [], "No bookings found for this service"));
     }
 
-    logger.info(`Successfully retrieved ${bookings.length} bookings for service: ${serviceId}`);
-
-    // Step 5: Return the bookings
+    logger.info(`Found ${bookings.length} bookings for service`);
     res.status(200).json(new ApiResponse(200, bookings, "Service bookings retrieved successfully"));
   } catch (error) {
-    logger.error(`Error fetching bookings for service ${serviceId}: ${error.message}`);
-    throw new ApiError(500, "Failed to retrieve service bookings");
+    logger.error(`Failed to get service bookings: ${error.message}`);
+    throw error;
   }
 });
 
