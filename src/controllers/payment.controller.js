@@ -18,10 +18,7 @@ dotenv.config({path: "./.env"});
 // payment.controller.js
 const handleStripeWebhookController = asyncHandler(async (req, res) => {
   const sig = req.headers["stripe-signature"];
-  const payload = req.body; // This is the raw body
-
-  console.log("signature-header", sig);
-  console.log("Raw Payload:", payload); // Log the raw payload
+  const payload = req.body;
 
   try {
     // Verify the webhook signature and construct the event
@@ -35,89 +32,86 @@ const handleStripeWebhookController = asyncHandler(async (req, res) => {
         logger.info(`PaymentIntent created: ${createdPaymentIntent.id}`);
         logger.info(`PaymentIntent metadata: ${JSON.stringify(createdPaymentIntent.metadata)}`);
 
-        // Check if the payment already exists
+        // Check if payment already exists
         const existingPayment = await Payment.findOne({transactionId: createdPaymentIntent.id});
         if (existingPayment) {
-          logger.info(`Payment already exists for transaction ID: ${createdPaymentIntent.id}`);
-          return res.json({received: true}); // Acknowledge the event without further processing
+          return res.json({received: true});
         }
 
-        // Fetch the booking and user details from the database
+        // Get booking
         const booking = await Booking.findById(createdPaymentIntent.metadata.booking);
-        const user = await User.findById(createdPaymentIntent.metadata.user);
-
-        if (!booking || !user) {
-          logger.error(`Booking or User not found for payment intent: ${createdPaymentIntent.id}`);
-          return res.status(404).json({error: "Booking or User not found"});
+        if (!booking) {
+          logger.error(`Booking not found for payment intent: ${createdPaymentIntent.id}`);
+          return res.status(404).json({error: "Booking not found"});
         }
 
-        // Verify that the user in the metadata is the owner of the booking
-        if (booking.user.toString() !== createdPaymentIntent.metadata.user) {
-          logger.error(`User ${createdPaymentIntent.metadata.user} is not the owner of booking ${createdPaymentIntent.metadata.booking}`);
-          return res.status(403).json({error: "Unauthorized access to booking"});
-        }
-
-        try {
-          // Create a new payment record in your database
-          const newPayment = await Payment.create({
-            user: user._id,
-            booking: booking._id,
-            paymentMethod: "stripe",
-            amount: createdPaymentIntent.amount / 100, // Convert from cents to dollars
-            transactionId: createdPaymentIntent.id,
-            paymentStatus: createdPaymentIntent.status,
-            paymentMetadata: {
-              gateway: "stripe", // Ensure this is included
-              gatewayResponse: createdPaymentIntent, // Save the entire payment intent object
-              gatewayId: createdPaymentIntent.id // Save the payment intent ID
-            }
-          });
-
-          if (!newPayment) {
-            logger.error(`Failed to create payment for transaction ID: ${createdPaymentIntent.id}`);
-          } else {
-            logger.info(`Payment created successfully for transaction ID: ${createdPaymentIntent.id}`);
+        // Prepare payment data
+        const paymentData = {
+          booking: booking._id,
+          paymentMethod: "stripe",
+          amount: createdPaymentIntent.amount / 100,
+          transactionId: createdPaymentIntent.id,
+          paymentStatus: createdPaymentIntent.status,
+          paymentMetadata: {
+            gateway: "stripe",
+            gatewayResponse: createdPaymentIntent,
+            gatewayId: createdPaymentIntent.id
           }
-        } catch (error) {
-          logger.error(`Database Create Error: ${error.message}`);
+        };
+
+        // Handle user vs guest payment
+        if (createdPaymentIntent.metadata.user) {
+          // User payment
+          const user = await User.findById(createdPaymentIntent.metadata.user);
+          if (!user) {
+            logger.error(`User not found for payment intent: ${createdPaymentIntent.id}`);
+            return res.status(404).json({error: "User not found"});
+          }
+
+          // Verify booking ownership
+          if (booking.user && booking.user.toString() !== createdPaymentIntent.metadata.user) {
+            logger.error(`User ${createdPaymentIntent.metadata.user} is not the owner of booking`);
+            return res.status(403).json({error: "Unauthorized access to booking"});
+          }
+
+          paymentData.user = user._id;
+        } else if (createdPaymentIntent.metadata.guestEmail) {
+          // Guest payment
+          paymentData.guestInfo = {
+            email: createdPaymentIntent.metadata.guestEmail
+          };
+        } else {
+          logger.error(`Missing user/guest reference in payment intent: ${createdPaymentIntent.id}`);
+          return res.status(400).json({error: "Missing user/guest reference"});
         }
+
+        // Create payment record
+        await Payment.create(paymentData);
         break;
 
       case "payment_intent.succeeded":
         const succeededPaymentIntent = event.data.object;
         logger.info(`PaymentIntent succeeded: ${succeededPaymentIntent.id}`);
-        logger.info(`PaymentIntent metadata: ${JSON.stringify(succeededPaymentIntent.metadata)}`); // Log metadata
 
         try {
-          // Validate metadata
-          if (!succeededPaymentIntent.metadata || !succeededPaymentIntent.metadata.booking || !succeededPaymentIntent.metadata.user) {
-            logger.error(`Missing metadata for payment intent: ${succeededPaymentIntent.id}`);
-            return res.json({received: true}); // Acknowledge the event without further processing
-          }
-
-          // Check if the payment exists
-          const existingPayment = await Payment.findOne({transactionId: succeededPaymentIntent.id});
-          if (!existingPayment) {
-            logger.error(`Payment not found for transaction ID: ${succeededPaymentIntent.id}`);
-            return res.json({received: true});
-          }
-
-          // Update the payment status in your database
+          // Update payment status
           const updatedPayment = await Payment.findOneAndUpdate({
             transactionId: succeededPaymentIntent.id
           }, {
             paymentStatus: "succeeded"
           }, {new: true});
 
-          if (!updatedPayment) {
-            logger.error(`Payment not found for transaction ID: ${succeededPaymentIntent.id}`);
+          if (updatedPayment) {
+            // Update booking status if payment succeeded
+            await Booking.findByIdAndUpdate(updatedPayment.booking, {
+              paymentStatus: "paid"
+            }, {new: true});
+            logger.info(`Payment and booking status updated for: ${succeededPaymentIntent.id}`);
           } else {
-            logger.info(`Payment status updated to succeeded for transaction ID: ${succeededPaymentIntent.id}`);
+            logger.error(`Payment not found: ${succeededPaymentIntent.id}`);
           }
         } catch (error) {
-          logger.error(`Database Update Error: ${error.message}`);
-          // Optionally, you can return a more specific error response to Stripe
-          return res.status(500).json({error: "Internal Server Error"});
+          logger.error(`Database update error: ${error.message}`);
         }
         break;
 
@@ -125,89 +119,111 @@ const handleStripeWebhookController = asyncHandler(async (req, res) => {
         const failedPaymentIntent = event.data.object;
         logger.info(`PaymentIntent failed: ${failedPaymentIntent.id}`);
 
-        try {
-          // Update the payment status in your database
-          const updatedPayment = await Payment.findOneAndUpdate({
-            transactionId: failedPaymentIntent.id
-          }, {
-            paymentStatus: "failed"
-          }, {new: true});
-
-          if (!updatedPayment) {
-            logger.error(`Payment not found for transaction ID: ${failedPaymentIntent.id}`);
-          } else {
-            logger.info(`Payment status updated to failed for transaction ID: ${failedPaymentIntent.id}`);
-          }
-        } catch (error) {
-          logger.error(`Database Update Error: ${error.message}`);
-        }
+        await Payment.findOneAndUpdate({
+          transactionId: failedPaymentIntent.id
+        }, {paymentStatus: "failed"});
         break;
 
       case "payment_intent.canceled":
         const canceledPaymentIntent = event.data.object;
         logger.info(`PaymentIntent canceled: ${canceledPaymentIntent.id}`);
 
-        try {
-          // Update the payment status in your database
-          const updatedPayment = await Payment.findOneAndUpdate({
-            transactionId: canceledPaymentIntent.id
-          }, {
-            paymentStatus: "canceled"
-          }, {new: true});
-
-          if (!updatedPayment) {
-            logger.error(`Payment not found for transaction ID: ${canceledPaymentIntent.id}`);
-          } else {
-            logger.info(`Payment status updated to canceled for transaction ID: ${canceledPaymentIntent.id}`);
-          }
-        } catch (error) {
-          logger.error(`Database Update Error: ${error.message}`);
-        }
+        await Payment.findOneAndUpdate({
+          transactionId: canceledPaymentIntent.id
+        }, {paymentStatus: "canceled"});
         break;
 
       case "charge.succeeded":
         const succeededCharge = event.data.object;
         logger.info(`Charge succeeded: ${succeededCharge.id}`);
 
-        try {
-          // Update the payment status in your database
-          const updatedPayment = await Payment.findOneAndUpdate({
-            transactionId: succeededCharge.payment_intent
-          }, {
-            paymentStatus: "succeeded"
-          }, {new: true});
-
-          if (!updatedPayment) {
-            logger.error(`Payment not found for transaction ID: ${succeededCharge.payment_intent}`);
-          } else {
-            logger.info(`Payment status updated to succeeded for transaction ID: ${succeededCharge.payment_intent}`);
-          }
-        } catch (error) {
-          logger.error(`Database Update Error: ${error.message}`);
-        }
+        await Payment.findOneAndUpdate({
+          transactionId: succeededCharge.payment_intent
+        }, {paymentStatus: "succeeded"});
         break;
 
       case "charge.updated":
         const updatedCharge = event.data.object;
         logger.info(`Charge updated: ${updatedCharge.id}`);
-        // Handle the updated charge (e.g., log or update database)
         break;
-        // Handle other event types (charge.succeeded, payment_intent.payment_failed, etc.)
+
       default:
         logger.info(`Unhandled event type: ${event.type}`);
     }
 
-    // Return a response to acknowledge receipt of the event
+    // Acknowledge receipt of the event
     res.json({received: true});
   } catch (error) {
     logger.error(`Webhook Error: ${error.message}`);
     throw new ApiError(400, `Webhook Error: ${error.message}`);
   }
 });
+
+
+// Add new createGuestPayment function
+const createGuestPayment = asyncHandler(async (req, res) => {
+  const {booking, paymentMethod, amount, paymentMetadata} = req.body;
+
+  // Validate inputs
+  if (!booking || !paymentMethod || !amount) {
+    throw new ApiError(400, "Missing required fields");
+  }
+
+  // Check if booking exists
+  const bookingExists = await Booking.findById(booking);
+  if (!bookingExists) {
+    throw new ApiError(404, "Booking not found");
+  }
+
+  // Verify this is a guest booking
+  if (bookingExists.user) {
+    throw new ApiError(400, "This is not a guest booking");
+  }
+
+  // Handle Stripe payment
+  if (paymentMethod === "stripe") {
+    try {
+      const paymentIntent = await createStripePaymentIntent(amount, "usd", {
+        booking: booking,
+        guestEmail: req.guestInfo.email,
+        ...paymentMetadata
+      });
+
+      const newPayment = await Payment.create({
+        guestInfo: {
+          email: req.guestInfo.email
+        },
+        booking: booking,
+        paymentMethod: "stripe",
+        amount: amount,
+        transactionId: paymentIntent.id,
+        paymentMetadata: {
+          gateway: "stripe",
+          gatewayResponse: paymentIntent,
+          gatewayId: paymentIntent.id
+        },
+        paymentStatus: paymentIntent.status
+      });
+
+      // Update booking status
+      await Booking.findByIdAndUpdate(booking, {
+        paymentMethod: "stripe",
+        paymentStatus: "pending"
+      }, {new: true});
+
+      return res.status(201).json(new ApiResponse(201, newPayment, "Payment created successfully"));
+    } catch (error) {
+      logger.error(`Payment Error: ${error.message}`);
+      throw new ApiError(500, `Payment failed: ${error.message}`);
+    }
+  }
+
+  throw new ApiError(400, "Payment method not supported");
+});
 /**
  * Create a new payment
  */
-const createPayment = asyncHandler(async (req, res) => {
+const createUserPayment = asyncHandler(async (req, res) => {
   const {booking, paymentMethod, amount, transactionId, paymentMetadata} = req.body;
   const user = req.user._id; // Authenticated user's ID
 
@@ -298,10 +314,11 @@ const createPayment = asyncHandler(async (req, res) => {
   throw new ApiError(400, "Payment method not yet supported");
 });
 
+
 /**
  * Confirm a Stripe PaymentIntent
  */
-const confirmPayment = asyncHandler(async (req, res) => {
+const confirmUserPayment = asyncHandler(async (req, res) => {
   const {paymentIntentId, paymentMethodId} = req.body;
 
   if (!paymentIntentId || !paymentMethodId) {
@@ -337,6 +354,54 @@ const confirmPayment = asyncHandler(async (req, res) => {
   }
 });
 
+const confirmGuestPayment = asyncHandler(async (req, res) => {
+  const { paymentIntentId, paymentMethodId, email } = req.body;
+
+  if (!paymentIntentId || !paymentMethodId || !email) {
+    throw new ApiError(400, "paymentIntentId, paymentMethodId and email are required");
+  }
+
+  try {
+    // Confirm the PaymentIntent
+    const confirmedPaymentIntent = await confirmStripePaymentIntent(
+      paymentIntentId, 
+      paymentMethodId
+    );
+
+    // Find the payment by transactionId and verify guest email
+    const payment = await Payment.findOne({
+      transactionId: paymentIntentId,
+      "guestInfo.email": email
+    });
+
+    if (!payment) {
+      throw new ApiError(404, "Payment not found or email mismatch");
+    }
+
+    // Update the payment status
+    const updatedPayment = await Payment.findOneAndUpdate(
+      { transactionId: paymentIntentId },
+      { paymentStatus: confirmedPaymentIntent.status },
+      { new: true }
+    );
+
+    // Update booking status if succeeded
+    if (confirmedPaymentIntent.status === "succeeded") {
+      await Booking.findByIdAndUpdate(
+        updatedPayment.booking,
+        { paymentStatus: "paid" },
+        { new: true }
+      );
+    }
+
+    return res.status(200).json(
+      new ApiResponse(200, updatedPayment, "Payment confirmed successfully")
+    );
+  } catch (error) {
+    logger.error(`Payment confirmation failed: ${error.message}`);
+    throw new ApiError(500, `Payment confirmation failed: ${error.message}`);
+  }
+});
 /**
  * Update payment status
  */
@@ -485,11 +550,13 @@ const handleRefund = asyncHandler(async (req, res) => {
 });
 
 export {
-  createPayment,
+  createGuestPayment,
+  createUserPayment,
   updatePaymentStatus,
   getUserPayments,
   getPaymentById,
   handleRefund,
-  confirmPayment,
+  confirmUserPayment,
+  confirmGuestPayment,
   handleStripeWebhookController // Export the webhook handler
 };

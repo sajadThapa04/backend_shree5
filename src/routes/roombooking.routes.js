@@ -1,25 +1,30 @@
 import Router from "express";
-import {createBooking, updateBooking, cancelBooking, getUserBookings, getServiceBooking} from "../controllers/roombooking.controller.js";
+import {
+  createUserBooking,
+  createGuestBooking,
+  updateBooking,
+  cancelBooking,
+  getUserBookings,
+  getServiceBooking
+} from "../controllers/roombooking.controller.js";
 import {verifyJwt} from "../middlewares/auth.middlewares.js";
-import {verifyGuestBooking} from "../middlewares/guest.middlewares.js"; // New middleware for guest validation
+import {verifyGuestBooking} from "../middlewares/guest.middlewares.js";
 
 const router = Router();
 
 // Authenticated user booking
-router.post("/user", verifyJwt, createBooking);
+router.post("/user", verifyJwt, createUserBooking);
 
 // Guest booking
-router.post("/guest", verifyGuestBooking, createBooking);
+router.post("/guest", verifyGuestBooking, createGuestBooking);
 
 // Protected routes (require JWT authentication)
-router.route("/:id").patch(verifyJwt, updateBooking). // Update a booking
-delete(verifyJwt, cancelBooking); // Cancel a booking
+router.route("/:id").patch(verifyJwt, updateBooking).delete(verifyJwt, cancelBooking);
 
-// Get bookings - supports both authenticated and guest access
-router.route("/user").get(verifyJwt, getUserBookings). // Authenticated user
-get(getUserBookings); // Guest access (with email query parameter)
+// Get bookings
+router.get("/user", verifyJwt, getUserBookings);
 
 // Host-only routes
-router.route("/service/:serviceId").get(verifyJwt, getServiceBooking); // Fetch all bookings for a specific host
+router.get("/service/:serviceId", verifyJwt, getServiceBooking);
 
 export default router;

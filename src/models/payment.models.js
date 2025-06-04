@@ -6,7 +6,26 @@ const paymentSchema = new Schema({
   user: {
     type: Schema.Types.ObjectId,
     ref: "User",
-    required: true
+    required: function () {
+      return !this.guestInfo; // Only required if no guest info
+    }
+  },
+  // Information for guest payments
+  guestInfo: {
+    email: {
+      type: String,
+      required: function () {
+        return !this.user; // Only required if no user provided
+      },
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: function (v) {
+          return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+        },
+        message: "Please enter a valid email address"
+      }
+    }
   },
   // Reference to the booking related to the payment
   booking: {
@@ -93,6 +112,13 @@ paymentSchema.index({booking: 1});
 paymentSchema.index({paymentStatus: 1});
 paymentSchema.index({paymentMethod: 1});
 
+// Add validation to ensure either user or guestInfo exists
+paymentSchema.pre("validate", function (next) {
+  if (!this.user && !this.guestInfo) {
+    return next(new Error("Payment must have either a user or guest info"));
+  }
+  next();
+});
 // Auto-set refund status if the payment is refunded
 paymentSchema.pre("save", function (next) {
   if (this.paymentStatus === "refunded" && this.refundStatus === "not_refunded") {
@@ -120,6 +146,13 @@ paymentSchema.pre("save", function (next) {
   next();
 });
 
+// Add validation to ensure either user or guestInfo is present
+paymentSchema.pre("validate", function (next) {
+  if (!this.user && !this.guestInfo) {
+    return next(new Error("Payment must be associated with either a user or include guest information"));
+  }
+  next();
+});
 // Virtual field for payment success
 paymentSchema.virtual("isPaymentSuccessful").get(function () {
   return this.paymentStatus === "paid";

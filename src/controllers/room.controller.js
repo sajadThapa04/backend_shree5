@@ -377,7 +377,6 @@ const getAllRooms = asyncHandler(async (req, res) => {
   }
 });
 
-
 // Get a room by ID
 const getRoomById = asyncHandler(async (req, res) => {
   const {id} = req.params;
@@ -390,8 +389,14 @@ const getRoomById = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid room ID.");
   }
 
-  // Step 2: Fetch the room from the database
-  const room = await Room.findById(id);
+  // Step 2: Fetch the room from the database with host and service populated
+  const room = await Room.findById(id).populate({
+    path: "service", select: "_id host", // Get both service ID and host reference
+    populate: {
+      path: "host",
+      select: "_id" // Just get the host ID
+    }
+  }).lean(); // Convert to plain JavaScript object
 
   // Step 3: Check if the room exists
   if (!room) {
@@ -399,9 +404,24 @@ const getRoomById = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Room not found.");
   }
 
-  // Step 4: Return the room details
+  // Step 4: Extract host ID from the populated service
+  const hostId = room.service
+    ?.host
+      ?._id;
+  if (!hostId) {
+    logger.error(`Host not found for room ID: ${id}`);
+    throw new ApiError(404, "Host information not available for this room.");
+  }
+
+  // Step 5: Add host ID to the room object
+  const roomWithHost = {
+    ...room,
+    host: hostId
+  };
+
+  // Step 6: Return the room details with host ID
   logger.info(`Room fetched successfully with ID: ${id}`);
-  res.status(200).json(new ApiResponse(200, room, "Room fetched successfully."));
+  res.status(200).json(new ApiResponse(200, roomWithHost, "Room fetched successfully."));
 });
 
 // Get rooms by service ID

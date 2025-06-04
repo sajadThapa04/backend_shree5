@@ -7,33 +7,17 @@ const booking = new Schema({
     type: Schema.Types.ObjectId,
     ref: "User",
     required: function () {
-      return !this.guestInfo; // Only required if no guest info provided
+      // Only required if there's no guestInfo object at all
+      return !(this.guestInfo && (this.guestInfo.fullName || this.guestInfo.email));
     },
     validate: {
       validator: function (v) {
-        // If guestInfo exists, user should be null, and vice versa
-        return !(this.guestInfo && v);
+        // Only validate if guestInfo has actual values
+        const hasGuestInfo = this.guestInfo && (this.guestInfo.fullName || this.guestInfo.email);
+        return !(hasGuestInfo && v);
       },
       message: "Booking cannot have both user and guest information"
     }
-  },
-  // Reference to the Host being booked
-  host: {
-    type: Schema.Types.ObjectId,
-    ref: "Host",
-    required: true
-  },
-  service: {
-    type: mongoose.Types.ObjectId,
-    ref: "Service",
-    required: true
-  },
-
-  // Reference to the Room being booked will add this feature in future
-  room: {
-    type: Schema.Types.ObjectId,
-    ref: "Room",
-    required: true
   },
 
   // Information for guest bookings (optional for registered users)
@@ -41,7 +25,8 @@ const booking = new Schema({
     fullName: {
       type: String,
       required: function () {
-        return !this.user; // Only required if no user provided
+        // Only required if there's no user
+        return !this.user;
       },
       trim: true,
       maxlength: [100, "Name cannot exceed 100 characters"]
@@ -49,7 +34,8 @@ const booking = new Schema({
     email: {
       type: String,
       required: function () {
-        return !this.user; // Only required if no user provided
+        // Only required if there's no user
+        return !this.user;
       },
       trim: true,
       lowercase: true,
@@ -95,9 +81,15 @@ const booking = new Schema({
     required: true,
     validate: {
       validator: function (value) {
-        return value >= new Date(); // Ensure check-in date is not in the past
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set to midnight
+
+        const checkInDate = new Date(value);
+        checkInDate.setHours(0, 0, 0, 0);
+
+        return checkInDate >= today;
       },
-      message: "Check-in date must be in the future."
+      message: "Check-in date cannot be in the past."
     }
   },
   checkOutDate: {

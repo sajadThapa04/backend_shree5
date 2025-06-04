@@ -6,13 +6,76 @@ import {Host} from "../models/host.model.js";
 import logger from "../utils/logger.js";
 import {Service} from "../models/services.model.js";
 import {Room} from "../models/room.model.js";
-import {User} from "../models/user.model.js";
 import mongoose from "mongoose";
 
-/**
- * Create a new booking (for both authenticated users and guests)
- */
-const createBooking = asyncHandler(async (req, res) => {
+// Common validation function
+const validateBookingInputs = (req, isGuestBooking) => {
+  const {
+    host,
+    service,
+    room,
+    checkInDate,
+    checkOutDate,
+    numberOfGuests,
+    totalPrice,
+    paymentMethod
+  } = req.body;
+
+  if (!host || !service || !room || !checkInDate || !checkOutDate || !numberOfGuests || !totalPrice || !paymentMethod) {
+    throw new ApiError(400, "All required fields must be provided");
+  }
+
+  // Date validation
+  const currentDateOnly = new Date();
+  currentDateOnly.setHours(0, 0, 0, 0);
+
+  const parsedCheckInDate = new Date(checkInDate);
+  parsedCheckInDate.setHours(0, 0, 0, 0);
+
+  const parsedCheckOutDate = new Date(checkOutDate);
+  parsedCheckOutDate.setHours(0, 0, 0, 0);
+
+  if (isNaN(parsedCheckInDate.getTime()) || isNaN(parsedCheckOutDate.getTime())) {
+    throw new ApiError(400, "Invalid date format");
+  }
+
+  if (parsedCheckInDate < currentDateOnly) {
+    throw new ApiError(400, "Check-in date must be today or in the future");
+  }
+
+  if (parsedCheckOutDate <= parsedCheckInDate) {
+    throw new ApiError(400, "Check-out date must be after check-in date");
+  }
+
+  if (!Number.isInteger(numberOfGuests) || numberOfGuests < 1) {
+    throw new ApiError(400, "Number of guests must be a positive integer");
+  }
+
+  if (isNaN(totalPrice) || totalPrice <= 0) {
+    throw new ApiError(400, "Total price must be a positive number");
+  }
+};
+
+// Common booking creation function
+const createBookingRecord = async (bookingData, roomId, session) => {
+  const [newBooking] = await Booking.create([bookingData], {session});
+
+  // Update room's bookedDates
+  await Room.findByIdAndUpdate(roomId, {
+    $push: {
+      bookedDates: {
+        checkInDate: bookingData.checkInDate,
+        checkOutDate: bookingData.checkOutDate,
+        booking: newBooking._id
+      }
+    }
+  }, {session});
+
+  return newBooking;
+};
+
+// Create booking for authenticated users
+const createUserBooking = asyncHandler(async (req, res) => {
   const {
     host,
     service,
@@ -22,113 +85,40 @@ const createBooking = asyncHandler(async (req, res) => {
     numberOfGuests,
     totalPrice,
     paymentMethod,
-    specialRequests,
-    guestInfo // Added for guest bookings
+    specialRequests
   } = req.body;
 
-  // Determine if this is a guest booking
-  const isGuestBooking = !req.user && guestInfo;
-  const userId = req.user
-    ?._id;
+  validateBookingInputs(req, false);
 
-  logger.info(
-    `Starting createBooking process for ${isGuestBooking
-    ? "guest"
-    : "user"}: ${userId || guestInfo
-      ?.email}`);
-
-  // Step 1: Validate input fields
-  if (!host || !service || !room || !checkInDate || !checkOutDate || !numberOfGuests || !totalPrice || !paymentMethod) {
-    logger.error("Missing required fields");
-    throw new ApiError(400, "All required fields must be provided");
-  }
-
-  // Additional validation for guest bookings
-  if (isGuestBooking) {
-    if (!guestInfo.fullName || !guestInfo.email) {
-      logger.error("Missing guest information");
-      throw new ApiError(400, "Guest bookings require full name and email");
-    }
-  }
-
-  // Step 2: Validate dates
-  const currentDate = new Date();
-  const parsedCheckInDate = new Date(checkInDate);
-  const parsedCheckOutDate = new Date(checkOutDate);
-
-  if (isNaN(parsedCheckInDate.getTime())) {
-    logger.error("Invalid check-in date format");
-    throw new ApiError(400, "Invalid check-in date format");
-  }
-
-  if (isNaN(parsedCheckOutDate.getTime())) {
-    logger.error("Invalid check-out date format");
-    throw new ApiError(400, "Invalid check-out date format");
-  }
-
-  if (parsedCheckInDate < currentDate) {
-    logger.error("Check-in date in the past");
-    throw new ApiError(400, "Check-in date must be in the future");
-  }
-
-  if (parsedCheckOutDate <= parsedCheckInDate) {
-    logger.error("Check-out before check-in");
-    throw new ApiError(400, "Check-out date must be after check-in date");
-  }
-
-  // Step 3: Validate guests and price
-  if (!Number.isInteger(numberOfGuests) || numberOfGuests < 1) {
-    logger.error("Invalid number of guests");
-    throw new ApiError(400, "Number of guests must be a positive integer");
-  }
-
-  if (isNaN(totalPrice) || totalPrice <= 0) {
-    logger.error("Invalid total price");
-    throw new ApiError(400, "Total price must be a positive number");
-  }
-
-  // Step 4: Validate entities exist and relationships
+  // Validate entities
   const [hostExists, serviceExists, roomExists] = await Promise.all([
     Host.findById(host),
     Service.findOne({_id: service, host}),
     Room.findOne({_id: room, service}).populate("service")
   ]);
 
-  if (!hostExists) {
-    logger.error(`Host not found: ${host}`);
-    throw new ApiError(404, "Host not found");
-  }
-
-  if (!serviceExists) {
-    logger.error(`Service not found or host mismatch: ${service}`);
-    throw new ApiError(404, "Service not found or doesn't belong to host");
-  }
-
-  if (!roomExists) {
-    logger.error(`Room not found: ${room}`);
-    throw new ApiError(404, "Room not found");
+  if (!hostExists || !serviceExists || !roomExists) {
+    throw new ApiError(404, "Host, service or room not found");
   }
 
   if (roomExists.service.host.toString() !== host.toString()) {
-    logger.error(`Room service host mismatch`);
     throw new ApiError(400, "Room doesn't belong to the specified host");
   }
 
-  // Step 5: Validate capacity
+  // Validate capacity
   const totalCapacity = roomExists.capacity.adults + roomExists.capacity.children;
   if (numberOfGuests > totalCapacity) {
-    logger.error(`Guest count exceeds capacity: ${numberOfGuests} > ${totalCapacity}`);
     throw new ApiError(400, "Number of guests exceeds room capacity");
   }
 
-  // Step 6: Check availability
+  // Check availability
   const overlappingBooking = await Booking.findOne({
     room,
     checkInDate: {
-      $lt: parsedCheckOutDate
+      $lt: new Date(checkOutDate)
     },
     checkOutDate: {
-      $gt: parsedCheckInDate
+      $gt: new Date(checkInDate)
     },
     status: {
       $ne: "cancelled"
@@ -136,55 +126,123 @@ const createBooking = asyncHandler(async (req, res) => {
   });
 
   if (overlappingBooking) {
-    logger.error(`Room already booked for dates`);
     throw new ApiError(400, "Room is already booked for the selected dates");
-  }
-
-  
-  // Step 7: Create booking
-  const bookingData = {
-    host,
-    service,
-    room,
-    checkInDate: parsedCheckInDate,
-    checkOutDate: parsedCheckOutDate,
-    numberOfGuests,
-    totalPrice,
-    paymentMethod,
-    specialRequests: specialRequests
-      ?.trim() || "",
-    paymentStatus: "pending",
-    status: "pending",
-    bookingSource: req.headers["x-booking-source"] || "web"
-  };
-
-  if (isGuestBooking) {
-    bookingData.guestInfo = {
-      fullName: guestInfo.fullName.trim(),
-      email: guestInfo.email.trim().toLowerCase(),
-      phone: guestInfo.phone
-        ?.trim() || undefined
-    };
-  } else {
-    bookingData.user = userId;
   }
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const newBooking = await Booking.create([bookingData], {session});
+    const bookingData = {
+      user: req.user._id,
+      host,
+      service,
+      room,
+      checkInDate: new Date(checkInDate),
+      checkOutDate: new Date(checkOutDate),
+      numberOfGuests,
+      totalPrice,
+      paymentMethod,
+      specialRequests: specialRequests
+        ?.trim() || "",
+      paymentStatus: "pending",
+      status: "pending",
+      bookingSource: req.headers["x-booking-source"] || "web"
+    };
 
-    // Update room's bookedDates
-    if (roomExists.bookedDates) {
-      roomExists.bookedDates.push({checkInDate: parsedCheckInDate, checkOutDate: parsedCheckOutDate, booking: newBooking[0]._id});
-      await roomExists.save({session});
-    }
-
+    const newBooking = await createBookingRecord(bookingData, room, session);
     await session.commitTransaction();
-    logger.info(`Booking created successfully: ${newBooking[0]._id}`);
 
-    res.status(201).json(new ApiResponse(201, newBooking[0], "Booking created successfully"));
+    res.status(201).json(new ApiResponse(201, newBooking, "Booking created successfully"));
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Booking creation failed: ${error.message}`);
+    throw new ApiError(500, "Failed to create booking");
+  } finally {
+    session.endSession();
+  }
+});
+
+// Create booking for guests
+const createGuestBooking = asyncHandler(async (req, res) => {
+  const {
+    host,
+    service,
+    room,
+    checkInDate,
+    checkOutDate,
+    numberOfGuests,
+    totalPrice,
+    paymentMethod,
+    specialRequests
+  } = req.body;
+
+  validateBookingInputs(req, true);
+
+  // Validate entities
+  const [hostExists, serviceExists, roomExists] = await Promise.all([
+    Host.findById(host),
+    Service.findOne({_id: service, host}),
+    Room.findOne({_id: room, service}).populate("service")
+  ]);
+
+  if (!hostExists || !serviceExists || !roomExists) {
+    throw new ApiError(404, "Host, service or room not found");
+  }
+
+  if (roomExists.service.host.toString() !== host.toString()) {
+    throw new ApiError(400, "Room doesn't belong to the specified host");
+  }
+
+  // Validate capacity
+  const totalCapacity = roomExists.capacity.adults + roomExists.capacity.children;
+  if (numberOfGuests > totalCapacity) {
+    throw new ApiError(400, "Number of guests exceeds room capacity");
+  }
+
+  // Check availability
+  const overlappingBooking = await Booking.findOne({
+    room,
+    checkInDate: {
+      $lt: new Date(checkOutDate)
+    },
+    checkOutDate: {
+      $gt: new Date(checkInDate)
+    },
+    status: {
+      $ne: "cancelled"
+    }
+  });
+
+  if (overlappingBooking) {
+    throw new ApiError(400, "Room is already booked for the selected dates");
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const bookingData = {
+      guestInfo: req.guestInfo, // From middleware
+      host,
+      service,
+      room,
+      checkInDate: new Date(checkInDate),
+      checkOutDate: new Date(checkOutDate),
+      numberOfGuests,
+      totalPrice,
+      paymentMethod,
+      specialRequests: specialRequests
+        ?.trim() || "",
+      paymentStatus: "pending",
+      status: "pending",
+      bookingSource: req.headers["x-booking-source"] || "web"
+    };
+
+    const newBooking = await createBookingRecord(bookingData, room, session);
+    await session.commitTransaction();
+
+    res.status(201).json(new ApiResponse(201, newBooking, "Booking created successfully"));
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Booking creation failed: ${error.message}`);
@@ -443,7 +501,8 @@ const getServiceBooking = asyncHandler(async (req, res) => {
 });
 
 export {
-  createBooking,
+  createUserBooking,
+  createGuestBooking,
   updateBooking,
   cancelBooking,
   getUserBookings,

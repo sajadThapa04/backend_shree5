@@ -1,16 +1,34 @@
 import Router from "express";
 import {
-  createPayment, updatePaymentStatus, getUserPayments, getPaymentById, confirmPayment // Import the confirmPayment controller
+  createUserPayment,
+  createGuestPayment,
+  updatePaymentStatus,
+  getUserPayments,
+  getPaymentById,
+  confirmUserPayment,
+  confirmGuestPayment,
+  handleStripeWebhookController
 } from "../controllers/payment.controller.js";
-import {verifyJwt} from "../middlewares/auth.middlewares.js"; // Import JWT verification middleware
+import {verifyJwt} from "../middlewares/auth.middlewares.js";
+import {verifyGuestPayment} from "../middlewares/guestPayment.middlewares.js";
 
 const router = Router();
 
-// Protected routes (require JWT authentication)
-router.route("/").post(verifyJwt, createPayment); // Create a new payment
-router.route("/:id/status").put(verifyJwt, updatePaymentStatus); // Update payment status
-router.route("/user").get(verifyJwt, getUserPayments); // Fetch all payments for a specific user
-router.route("/:id").get(verifyJwt, getPaymentById); // Fetch payment details by ID
-router.route("/confirm").post(verifyJwt, confirmPayment); // Confirm a payment
+// Authenticated user payment routes
+router.post("/user", verifyJwt, createUserPayment);
+router.get("/user", verifyJwt, getUserPayments);
+router.get("/user/:id", verifyJwt, getPaymentById);
+
+// Guest payment routes
+router.post("/guest", verifyGuestPayment, createGuestPayment);
+router.post("/guest/confirm", confirmGuestPayment); // No auth for guests
+
+
+// Shared routes
+router.put("/:id/status", verifyJwt, updatePaymentStatus);
+router.post("/users/confirm", verifyJwt, confirmUserPayment);
+
+// Webhook (no auth)
+router.post("/webhook", handleStripeWebhookController);
 
 export default router;

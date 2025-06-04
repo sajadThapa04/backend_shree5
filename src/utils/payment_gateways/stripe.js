@@ -14,6 +14,7 @@ export const createStripePaymentIntent = async (amount, currency = "usd", option
   const {
     booking,
     user,
+    guestEmail,
     ...paymentMetadata
   } = options;
 
@@ -26,17 +27,33 @@ export const createStripePaymentIntent = async (amount, currency = "usd", option
 
   try {
     logger.info(`Creating Stripe payment intent for amount: ${amount} ${currency}`);
+
+    // Prepare metadata - handle both user and guest cases
+    const metadata = {
+      booking: booking
+        ?.toString(), // Safe toString() call
+      ...(
+        user
+        ? {
+          user: user.toString()
+        }
+        : {}), // Only include user if it exists
+      ...(
+        guestEmail
+        ? {
+          guestEmail
+        }
+        : {}), // Include guest email if it exists
+      ...paymentMetadata
+    };
+
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount * 100, // Convert to cents
+      amount: Math.round(amount * 100), // Convert to cents
       currency,
-      metadata: {
-        booking: booking.toString(), // Ensure this is included
-        user: user.toString(), // Ensure this is included
-        ...paymentMetadata // Include any additional metadata
-      },
+      metadata,
       automatic_payment_methods: {
-        enabled: true, // Enable automatic payment methods
-        allow_redirects: "never" // Disable redirect-based payment methods
+        enabled: true,
+        allow_redirects: "never"
       }
     });
 
