@@ -159,13 +159,14 @@ const handleStripeWebhookController = asyncHandler(async (req, res) => {
   }
 });
 
-
 // Add new createGuestPayment function
 const createGuestPayment = asyncHandler(async (req, res) => {
-  const {booking, paymentMethod, amount, paymentMetadata} = req.body;
+  const {booking, paymentMethod, amount, paymentMetadata, guestInfo} = req.body;
 
   // Validate inputs
-  if (!booking || !paymentMethod || !amount) {
+  if (
+    !booking || !paymentMethod || !amount || !guestInfo
+    ?.email) {
     throw new ApiError(400, "Missing required fields");
   }
 
@@ -185,13 +186,13 @@ const createGuestPayment = asyncHandler(async (req, res) => {
     try {
       const paymentIntent = await createStripePaymentIntent(amount, "usd", {
         booking: booking,
-        guestEmail: req.guestInfo.email,
+        guestEmail: guestInfo.email, // Use from guestInfo
         ...paymentMetadata
       });
 
       const newPayment = await Payment.create({
         guestInfo: {
-          email: req.guestInfo.email
+          email: guestInfo.email
         },
         booking: booking,
         paymentMethod: "stripe",
@@ -314,7 +315,6 @@ const createUserPayment = asyncHandler(async (req, res) => {
   throw new ApiError(400, "Payment method not yet supported");
 });
 
-
 /**
  * Confirm a Stripe PaymentIntent
  */
@@ -355,7 +355,7 @@ const confirmUserPayment = asyncHandler(async (req, res) => {
 });
 
 const confirmGuestPayment = asyncHandler(async (req, res) => {
-  const { paymentIntentId, paymentMethodId, email } = req.body;
+  const {paymentIntentId, paymentMethodId, email} = req.body;
 
   if (!paymentIntentId || !paymentMethodId || !email) {
     throw new ApiError(400, "paymentIntentId, paymentMethodId and email are required");
@@ -363,40 +363,30 @@ const confirmGuestPayment = asyncHandler(async (req, res) => {
 
   try {
     // Confirm the PaymentIntent
-    const confirmedPaymentIntent = await confirmStripePaymentIntent(
-      paymentIntentId, 
-      paymentMethodId
-    );
+    const confirmedPaymentIntent = await confirmStripePaymentIntent(paymentIntentId, paymentMethodId);
 
     // Find the payment by transactionId and verify guest email
-    const payment = await Payment.findOne({
-      transactionId: paymentIntentId,
-      "guestInfo.email": email
-    });
+    const payment = await Payment.findOne({transactionId: paymentIntentId, "guestInfo.email": email});
 
     if (!payment) {
       throw new ApiError(404, "Payment not found or email mismatch");
     }
 
     // Update the payment status
-    const updatedPayment = await Payment.findOneAndUpdate(
-      { transactionId: paymentIntentId },
-      { paymentStatus: confirmedPaymentIntent.status },
-      { new: true }
-    );
+    const updatedPayment = await Payment.findOneAndUpdate({
+      transactionId: paymentIntentId
+    }, {
+      paymentStatus: confirmedPaymentIntent.status
+    }, {new: true});
 
     // Update booking status if succeeded
     if (confirmedPaymentIntent.status === "succeeded") {
-      await Booking.findByIdAndUpdate(
-        updatedPayment.booking,
-        { paymentStatus: "paid" },
-        { new: true }
-      );
+      await Booking.findByIdAndUpdate(updatedPayment.booking, {
+        paymentStatus: "paid"
+      }, {new: true});
     }
 
-    return res.status(200).json(
-      new ApiResponse(200, updatedPayment, "Payment confirmed successfully")
-    );
+    return res.status(200).json(new ApiResponse(200, updatedPayment, "Payment confirmed successfully"));
   } catch (error) {
     logger.error(`Payment confirmation failed: ${error.message}`);
     throw new ApiError(500, `Payment confirmation failed: ${error.message}`);
