@@ -1,11 +1,11 @@
-import { db_connection } from "./db/index.js";
+import {db_connection} from "./db/index.js";
 import dotenv from "dotenv";
 import app from "./app.js";
 // import geocodeCoordinates from "./utils/geoCordinates.js";
 
 // import {createStripePaymentIntent} from "./utils/payment_gateways/stripe.js";
 
-dotenv.config({ path: "./.env" });
+dotenv.config({path: "./.env"});
 
 db_connection().then(() => {
   const port = process.env.PORT || 8000;
@@ -19,7 +19,6 @@ db_connection().then(() => {
 }).catch(err => {
   console.log("something went wrong: \n", err);
 });
-
 
 // const createTestPayment = async () => {
 //   try {
