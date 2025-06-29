@@ -47,12 +47,12 @@ const createService = asyncHandler(async (req, res) => {
     }
 
     /*
-                                    // Validate capacity
-                                    if (capacity <= 0) {
-                                      logger.error(`Invalid capacity: ${capacity}`);
-                                      throw new ApiError(400, "Capacity must be a positive number");
-                                    }
-                                    */
+                                        // Validate capacity
+                                        if (capacity <= 0) {
+                                          logger.error(`Invalid capacity: ${capacity}`);
+                                          throw new ApiError(400, "Capacity must be a positive number");
+                                        }
+                                        */
 
     // Validate coordinates
     if (!Array.isArray(coordinates) || coordinates.length !== 2 || !coordinates.every(coord => typeof coord === "number")) {
@@ -176,12 +176,12 @@ const updateService = asyncHandler(async (req, res) => {
     }
 
     /*
-                                    // Validate capacity if provided
-                                    if (capacity && capacity <= 0) {
-                                      logger.error(`Invalid capacity: ${capacity}`);
-                                      throw new ApiError(400, "Capacity must be a positive number");
-                                    }
-                                    */
+                                        // Validate capacity if provided
+                                        if (capacity && capacity <= 0) {
+                                          logger.error(`Invalid capacity: ${capacity}`);
+                                          throw new ApiError(400, "Capacity must be a positive number");
+                                        }
+                                        */
 
     // Validate coordinates if provided
     let geocodedAddress = null;
@@ -230,11 +230,11 @@ const updateService = asyncHandler(async (req, res) => {
       updateData.type = type;
     
     /*
-                                    if (capacity)
-                                      updateData.capacity = capacity;
-                                    if (amenities)
-                                      updateData.amenities = Array.isArray(amenities) ? amenities : [amenities];
-                                    */
+                                        if (capacity)
+                                          updateData.capacity = capacity;
+                                        if (amenities)
+                                          updateData.amenities = Array.isArray(amenities) ? amenities : [amenities];
+                                        */
 
     if (coordinates && geocodedAddress) {
       updateData["address.coordinates"] = {
@@ -318,14 +318,14 @@ const deleteService = asyncHandler(async (req, res) => {
   }
 
   /*
-                  // Step 3: Delete images from Cloudinary (if any)
-                  if (service.images && service.images.length > 0) {
-                    for (const imageUrl of service.images) {
-                      const publicId = imageUrl.split("/").pop().split(".")[0]; // Extract public ID from URL
-                      await deleteFromCloudinary(publicId); // Delete the image from Cloudinary
+                    // Step 3: Delete images from Cloudinary (if any)
+                    if (service.images && service.images.length > 0) {
+                      for (const imageUrl of service.images) {
+                        const publicId = imageUrl.split("/").pop().split(".")[0]; // Extract public ID from URL
+                        await deleteFromCloudinary(publicId); // Delete the image from Cloudinary
+                      }
                     }
-                  }
-                  */
+                    */
 
   // Step 4: Delete the service
   await Service.findByIdAndDelete(id);
@@ -388,8 +388,10 @@ const getServiceNames = asyncHandler(async (req, res) => {
     // In future, you can uncomment the status filter below
     const services = await Service.find(
     // { status: "active" },  Filter only active services (commented for now)
-    {}, { // Empty filter to get all services
+    {}, {
+      // Empty filter to get all services
       name: 1,
+      address: 1,  //added the address to display it on the frontend
       type: 1,
       _id: 1,
       status: 1 // Including status in response for debugging

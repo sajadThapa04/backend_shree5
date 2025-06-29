@@ -29,7 +29,8 @@ router.delete("/:id", verifyJwt, deleteRestaurant);
 router.get("/", getAllRestaurants);
 
 // Fetch a restaurant by ID
-router.get("/:id", verifyJwt,getRestaurantById);
+router.get("/:id",getRestaurantById);
+// router.get("/:id", verifyJwt,getRestaurantById);
 
 // Fetch restaurants by service ID
 router.get("/service/:serviceId",verifyJwt, getRestaurantsByService);
